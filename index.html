@@ -10,12 +10,14 @@
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1c1f24;--text:#e6e8eb;--muted:#9aa3ad;--accent:#4c8dff;--btn:#2f6fe0;--border:#333a42;--err:#ff6b6b;--ok:#66bb6a;--sel:#26324a}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow-x:hidden;-webkit-tap-highlight-color:transparent}
+button{touch-action:manipulation}
 .wrap{max-width:980px;margin:0 auto;padding:16px}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-top:16px}
 .narrow{max-width:440px;margin:8vh auto 0}
 h1{font-size:1.25rem;margin:0 0 12px}
-label{display:block;margin:12px 0 0;font-size:.9rem;color:var(--muted)}
+label{display:block;margin:12px 0 0;font-size:.9rem;color:var(--muted);overflow-wrap:anywhere}
 input,textarea{width:100%;margin-top:4px;padding:10px 12px;font:inherit;font-size:1rem;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:8px}
 input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:0}
 textarea{min-height:55vh;resize:vertical;line-height:1.6}
@@ -32,15 +34,25 @@ button:disabled{opacity:.6;cursor:wait}
 .msg.ok{color:var(--ok)}
 details{margin-top:14px}
 summary{cursor:pointer;color:var(--muted);font-size:.9rem}
-.layout{display:grid;grid-template-columns:210px 1fr;gap:16px;margin-top:12px}
+.layout{display:grid;grid-template-columns:210px minmax(0,1fr);gap:16px;margin-top:12px}
+.layout>*{min-width:0}
 .notelist{display:flex;flex-direction:column;gap:4px}
 .notelist button{margin:0;text-align:left;color:var(--text);background:transparent;border:1px solid transparent;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%}
 .notelist button.active{background:var(--sel);border-color:var(--accent)}
 .block{width:100%}
 @media (max-width:640px){
-  .layout{grid-template-columns:1fr}
-  .notelist{flex-direction:row;overflow-x:auto;padding-bottom:4px}
-  .notelist button{width:auto;flex:0 0 auto;max-width:60vw}
+  .wrap{padding:10px}
+  .card{padding:14px;margin-top:10px;border-radius:10px}
+  .narrow{margin-top:4vh}
+  .layout{grid-template-columns:minmax(0,1fr);gap:12px}
+  .notelist{flex-direction:row;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:6px;scrollbar-width:thin}
+  .notelist button{width:auto;flex:0 0 auto;max-width:60vw;min-height:44px}
+  button{min-height:44px}
+  .bar button{flex:0 0 auto}
+  .bar .spacer{flex:1 1 0;min-width:0}
+  textarea{min-height:45vh;min-height:45dvh}
+  #pinBtn,#delBtn,#delBox button,#pinBox button,#addBox button{width:calc(50% - 8px)}
+  #pinBtn{margin-right:8px!important}
 }
 .pw{position:relative;display:block;margin-top:4px}
 .pw input{margin-top:0;padding-right:44px}
