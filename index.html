@@ -41,14 +41,19 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
 .notelist button{margin:0;text-align:left;color:var(--text);background:transparent;border:1px solid transparent;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%}
 .notelist button.active{background:var(--sel);border-color:var(--accent)}
 .block{width:100%}
-.pw{position:relative;margin-top:4px}
-.pw input{margin-top:0;padding-right:70px}
-.pw .eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);margin:0;padding:4px 10px;font-size:.8rem;background:transparent;color:var(--accent);border:1px solid var(--border)}
 @media (max-width:640px){
   .layout{grid-template-columns:1fr}
   .notelist{flex-direction:row;overflow-x:auto;padding-bottom:4px}
   .notelist button{width:auto;flex:0 0 auto;max-width:60vw}
 }
+.pw{position:relative;display:block;margin-top:4px}
+.pw input{margin-top:0;padding-right:44px}
+.pw .eye{position:absolute;top:0;right:0;bottom:0;width:42px;margin:0;padding:0;display:flex;align-items:center;justify-content:center;background:transparent;color:var(--muted);border-radius:0 8px 8px 0}
+.pw .eye:hover,.pw .eye[aria-pressed="true"]{color:var(--accent)}
+.pw .eye svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.pw .eye .off{display:none}
+.pw .eye[aria-pressed="true"] .on{display:none}
+.pw .eye[aria-pressed="true"] .off{display:block}
 </style>
 </head>
 <body>
@@ -185,7 +190,6 @@ const S = { owner: '', repo: '', sha: null, file: null, key: null, salt: null,
 /* ---------- tiện ích ---------- */
 function show(name) {
   ['loading', 'setup', 'unlock', 'editor'].forEach(v => { $('v-' + v).hidden = (v !== name); });
-  resetEyes();
 }
 function setMsg(id, text, kind) {
   const el = $(id);
@@ -314,7 +318,6 @@ function hideDelBox() {
   $('delBox').hidden = true;
   $('d-pw').value = '';
   $('delBtn').hidden = false;
-  resetEyes();
 }
 function switchTo(id) {
   S.cur = id;
@@ -345,7 +348,6 @@ function hidePinBox() {
   $('pinBox').hidden = true;
   $('p-pw').value = '';
   $('pinBtn').hidden = false;
-  resetEyes();
 }
 function askPin() {
   hideDelBox();
@@ -378,7 +380,6 @@ function hideAddBox() {
   $('addBox').hidden = true;
   $('a-pw').value = '';
   $('addBtn').hidden = false;
-  resetEyes();
 }
 function askAdd() {
   $('addBtn').hidden = true;
@@ -621,6 +622,7 @@ function lock() {
   $('n-pw2').value = '';
   $('n-pw').value = '';
   $('n-token').value = '';
+  resetEyes();
   init();
 }
 
@@ -692,21 +694,30 @@ $('r-btn').addEventListener('click', () => {
   init();
 });
 
-/* ---------- nút hiện/ẩn mật khẩu ---------- */
-function initEyes() {
+/* ---------- khởi động ---------- */
+Object.assign(S, detectRepo());
+/* ---------- nút con mắt hiện/ẩn mật khẩu ---------- */
+const EYE_SVG = '<svg class="on" viewBox="0 0 24 24" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>'
+  + '<svg class="off" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.94 17.94A10.9 10.9 0 0 1 12 19C5 19 1 12 1 12a19.8 19.8 0 0 1 5.06-5.94M9.9 5.24A10.4 10.4 0 0 1 12 5c7 0 11 7 11 7a19.7 19.7 0 0 1-3.17 4.19M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="M1 1l22 22"/></svg>';
+function setupEyes() {
   document.querySelectorAll('input[type="password"]').forEach(inp => {
-    const wrap = document.createElement('div');
+    const wrap = document.createElement('span');
     wrap.className = 'pw';
     inp.parentNode.insertBefore(wrap, inp);
     wrap.appendChild(inp);
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'eye';
-    b.textContent = 'Hiện';
-    b.addEventListener('click', () => {
-      const reveal = (inp.type === 'password');
-      inp.type = reveal ? 'text' : 'password';
-      b.textContent = reveal ? 'Ẩn' : 'Hiện';
+    b.tabIndex = 0;
+    b.setAttribute('aria-label', 'Hiện mật khẩu');
+    b.setAttribute('aria-pressed', 'false');
+    b.innerHTML = EYE_SVG;
+    b.addEventListener('click', e => {
+      e.preventDefault();
+      const show = inp.type === 'password';
+      inp.type = show ? 'text' : 'password';
+      b.setAttribute('aria-pressed', show ? 'true' : 'false');
+      b.setAttribute('aria-label', show ? 'Ẩn mật khẩu' : 'Hiện mật khẩu');
       inp.focus();
     });
     wrap.appendChild(b);
@@ -714,14 +725,14 @@ function initEyes() {
 }
 function resetEyes() {
   document.querySelectorAll('.pw').forEach(w => {
-    w.querySelector('input').type = 'password';
-    w.querySelector('.eye').textContent = 'Hiện';
+    const inp = w.querySelector('input'), b = w.querySelector('.eye');
+    inp.type = 'password';
+    b.setAttribute('aria-pressed', 'false');
+    b.setAttribute('aria-label', 'Hiện mật khẩu');
   });
 }
+setupEyes();
 
-/* ---------- khởi động ---------- */
-initEyes();
-Object.assign(S, detectRepo());
 init();
 })();
 </script>
