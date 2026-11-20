@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Ghi chú</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#1c1e21;--muted:#6b7280;--accent:#2563eb;--border:#d7dbe0;--err:#c62828;--ok:#2e7d32}
+@media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1c1f24;--text:#e6e8eb;--muted:#9aa3ad;--accent:#4c8dff;--border:#333a42;--err:#ff6b6b;--ok:#66bb6a}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:820px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-top:16px}
+.narrow{max-width:440px;margin:8vh auto 0}
+h1{font-size:1.25rem;margin:0 0 12px}
+label{display:block;margin:12px 0 0;font-size:.9rem;color:var(--muted)}
+input,textarea{width:100%;margin-top:4px;padding:10px 12px;font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:8px}
+input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:0}
+textarea{min-height:60vh;resize:vertical;line-height:1.6}
+button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:10px 16px;margin-top:16px;color:#fff;background:var(--accent)}
+button.ghost{background:transparent;color:var(--accent);border:1px solid var(--border)}
+button:disabled{opacity:.6;cursor:wait}
+.bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bar button{margin-top:0}
+.spacer{flex:1}
+.muted{color:var(--muted);font-size:.9rem}
+.msg{min-height:1.4em;margin:10px 0 0;font-size:.9rem}
+.msg.err{color:var(--err)}
+.msg.ok{color:var(--ok)}
+details{margin-top:14px}
+summary{cursor:pointer;color:var(--muted);font-size:.9rem}
+.repo{margin:20px auto 0;max-width:820px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.row input{flex:1;min-width:140px}
+.row button{margin-top:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section id="v-loading" class="card narrow">
+    <p id="loadMsg" class="msg">Đang tải…</p>
+  </section>
+
+  <section id="v-setup" class="card narrow" hidden>
+    <h1>Thiết lập lần đầu</h1>
+    <p class="muted">Repo chưa có dữ liệu. Token và nội dung sẽ được mã hóa bằng mật khẩu trước khi lưu lên GitHub.</p>
+    <p class="muted" id="s-repo"></p>
+    <form id="setupForm">
+      <label>GitHub token (quyền Contents: Read and write)
+        <input id="s-token" type="password" autocomplete="off" required>
+      </label>
+      <label>Mật khẩu mới (ít nhất 12 ký tự)
+        <input id="s-pw" type="password" autocomplete="new-password" required>
+      </label>
+      <label>Nhập lại mật khẩu
+        <input id="s-pw2" type="password" autocomplete="new-password" required>
+      </label>
+      <button id="s-btn" type="submit">Tạo và lưu</button>
+      <p id="s-msg" class="msg"></p>
+    </form>
+  </section>
+
+  <section id="v-unlock" class="card narrow" hidden>
+    <h1>Ghi chú</h1>
+    <form id="unlockForm">
+      <label>Mật khẩu
+        <input id="u-pw" type="password" autocomplete="off" required>
+      </label>
+      <button id="u-btn" type="submit">Mở</button>
+      <p id="u-msg" class="msg"></p>
+    </form>
+  </section>
+
+  <section id="v-editor" class="card" hidden>
+    <div class="bar">
+      <span id="status" class="muted"></span>
+      <span class="spacer"></span>
+      <button id="saveBtn" type="button">Lưu</button>
+      <button id="lockBtn" type="button" class="ghost">Khóa</button>
+    </div>
+    <label style="margin-top:12px">Nội dung
+      <textarea id="text" spellcheck="false"></textarea>
+    </label>
+    <p id="e-msg" class="msg"></p>
+    <details>
+      <summary>Đổi mật khẩu / token</summary>
+      <label>Mật khẩu mới (để trống nếu không đổi)
+        <input id="n-pw" type="password" autocomplete="new-password">
+      </label>
+      <label>Token mới (để trống nếu không đổi)
+        <input id="n-token" type="password" autocomplete="off">
+      </label>
+      <button id="applyBtn" type="button" class="ghost">Áp dụng và lưu</button>
+    </details>
+  </section>
+
+  <details id="repoBox" class="repo">
+    <summary id="repoLabel">Repo</summary>
+    <div class="row">
+      <input id="r-owner" placeholder="tên tài khoản GitHub" autocomplete="off">
+      <input id="r-repo" placeholder="tên repo" autocomplete="off">
+      <button id="r-btn" type="button" class="ghost">Dùng repo này</button>
+    </div>
+  </details>
+
+</div>
+
+<script>
+(() => {
+'use strict';
+
+const API = 'https://api.github.com';
+const PATH = 'data.json';
+const ITER = 600000;
+const IDLE_MS = 10 * 60 * 1000;
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+const $ = id => document.getElementById(id);
+
+const S = { owner: '', repo: '', sha: null, file: null, key: null, salt: null,
+            iter: ITER, token: null, dirty: false, saved: '' };
+
+/* ---------- tiện ích ---------- */
+function show(name) {
+  ['loading', 'setup', 'unlock', 'editor'].forEach(v => { $('v-' + v).hidden = (v !== name); });
+}
+function setMsg(id, text, kind) {
+  const el = $(id);
+  el.textContent = text || '';
+  el.className = 'msg' + (kind ? ' ' + kind : '');
+}
+function toB64(buf) {
+  const u = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function fromB64(s) {
+  const bin = atob(s);
+  const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return u;
+}
+function busy(btn, on) { btn.disabled = on; }
+
+/* ---------- mã hóa (AES-GCM + PBKDF2) ---------- */
+async function deriveKey(pw, salt, iter) {
+  const base = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: iter, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function makeFile(key, salt, iter, payload) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(payload)));
+  return { v: 1, iter, salt: toB64(salt), iv: toB64(iv), ct: toB64(ct) };
+}
+
+/* ---------- GitHub API ---------- */
+function fileUrl() { return `${API}/repos/${S.owner}/${S.repo}/contents/${PATH}`; }
+
+async function fetchFile() {
+  const r = await fetch(fileUrl(), { headers: { Accept: 'application/vnd.github+json' }, cache: 'no-store' });
+  if (r.status === 404) return null;
+  if (r.status === 403 || r.status === 429) throw new Error('GitHub tạm chặn truy cập (quá nhiều yêu cầu). Thử lại sau ít phút.');
+  if (!r.ok) throw new Error('GitHub trả về lỗi ' + r.status + '.');
+  const j = await r.json();
+  if (!j.content) throw new Error('Không đọc được file dữ liệu (có thể quá lớn).');
+  return { sha: j.sha, file: JSON.parse(atob(j.content.replace(/\s/g, ''))) };
+}
+
+async function putFile(token, fileObj, sha) {
+  const body = { message: 'update', content: btoa(JSON.stringify(fileObj)) };
+  if (sha) body.sha = sha;
+  const r = await fetch(fileUrl(), {
+    method: 'PUT',
+    headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (r.ok) return (await r.json()).content.sha;
+  if (r.status === 401) throw new Error('Token sai hoặc đã hết hạn.');
+  if (r.status === 403 || r.status === 404) throw new Error('Token không ghi được vào repo này. Kiểm tra token có quyền Contents: Read and write và đúng repo.');
+  if (r.status === 409 || r.status === 422) {
+    const e = new Error('File trên GitHub đã thay đổi ở nơi khác. Hãy sao chép nội dung bạn vừa sửa, bấm Khóa rồi mở lại.');
+    e.conflict = true;
+    throw e;
+  }
+  throw new Error('Lỗi khi lưu: ' + r.status);
+}
+
+/* ---------- xác định repo ---------- */
+function detectRepo() {
+  try {
+    const s = JSON.parse(localStorage.getItem('notes_repo') || 'null');
+    if (s && s.owner && s.repo) return s;
+  } catch (e) {}
+  const h = location.hostname;
+  if (h.endsWith('.github.io')) {
+    const owner = h.slice(0, -'.github.io'.length);
+    let seg = location.pathname.split('/').filter(Boolean)[0] || '';
+    if (!seg || /\.html?$/.test(seg)) seg = owner + '.github.io';
+    return { owner, repo: seg };
+  }
+  return { owner: '', repo: '' };
+}
+
+/* ---------- luồng chính ---------- */
+async function init() {
+  show('loading');
+  setMsg('loadMsg', 'Đang tải…');
+  $('repoLabel').textContent = (S.owner && S.repo) ? `Repo: ${S.owner}/${S.repo}` : 'Repo (chưa xác định)';
+  $('r-owner').value = S.owner;
+  $('r-repo').value = S.repo;
+  if (!S.owner || !S.repo) {
+    setMsg('loadMsg', 'Chưa xác định được repo. Mở mục "Repo" bên dưới, nhập tên tài khoản và tên repo.', 'err');
+    $('repoBox').open = true;
+    return;
+  }
+  try {
+    const r = await fetchFile();
+    if (!r) {
+      $('s-repo').textContent = `Repo: ${S.owner}/${S.repo}`;
+      show('setup');
+      $('s-token').focus();
+      return;
+    }
+    S.sha = r.sha;
+    S.file = r.file;
+    show('unlock');
+    $('u-pw').focus();
+  } catch (e) {
+    setMsg('loadMsg', e.message, 'err');
+  }
+}
+
+async function doSetup(ev) {
+  ev.preventDefault();
+  const token = $('s-token').value.trim();
+  const pw = $('s-pw').value;
+  if (!token) return setMsg('s-msg', 'Chưa nhập token.', 'err');
+  if (pw.length < 12) return setMsg('s-msg', 'Mật khẩu cần ít nhất 12 ký tự.', 'err');
+  if (pw !== $('s-pw2').value) return setMsg('s-msg', 'Hai mật khẩu không khớp.', 'err');
+  busy($('s-btn'), true);
+  setMsg('s-msg', 'Đang mã hóa và lưu…');
+  try {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const key = await deriveKey(pw, salt, ITER);
+    const file = await makeFile(key, salt, ITER, { text: '', token });
+    const sha = await putFile(token, file, null);
+    S.key = key; S.salt = salt; S.iter = ITER; S.token = token; S.sha = sha;
+    $('s-token').value = ''; $('s-pw').value = ''; $('s-pw2').value = '';
+    openEditor('');
+  } catch (e) {
+    setMsg('s-msg', e.message, 'err');
+  } finally {
+    busy($('s-btn'), false);
+  }
+}
+
+async function doUnlock(ev) {
+  ev.preventDefault();
+  const pw = $('u-pw').value;
+  busy($('u-btn'), true);
+  setMsg('u-msg', 'Đang giải mã…');
+  try {
+    const f = S.file;
+    const salt = fromB64(f.salt);
+    const iter = f.iter || ITER;
+    const key = await deriveKey(pw, salt, iter);
+    let plain;
+    try {
+      plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(f.iv) }, key, fromB64(f.ct));
+    } catch (e) {
+      throw new Error('Sai mật khẩu.');
+    }
+    const data = JSON.parse(dec.decode(plain));
+    S.key = key; S.salt = salt; S.iter = iter; S.token = data.token;
+    $('u-pw').value = '';
+    openEditor(data.text || '');
+  } catch (e) {
+    setMsg('u-msg', e.message, 'err');
+    $('u-pw').select();
+  } finally {
+    busy($('u-btn'), false);
+  }
+}
+
+function openEditor(text) {
+  $('text').value = text;
+  S.saved = text;
+  S.dirty = false;
+  setMsg('u-msg', '');
+  setMsg('s-msg', '');
+  setMsg('e-msg', '');
+  updateStatus();
+  show('editor');
+  resetIdle();
+  $('text').focus();
+}
+
+function updateStatus() {
+  $('status').textContent = S.dirty ? 'Chưa lưu thay đổi' : 'Đã lưu';
+}
+
+async function persist(next, okText) {
+  const payload = { text: $('text').value, token: next.token };
+  const file = await makeFile(next.key, next.salt, next.iter, payload);
+  const sha = await putFile(next.token, file, S.sha);
+  S.sha = sha;
+  S.key = next.key; S.salt = next.salt; S.iter = next.iter; S.token = next.token;
+  S.saved = payload.text;
+  S.dirty = ($('text').value !== S.saved);
+  updateStatus();
+  setMsg('e-msg', okText || 'Đã lưu lên GitHub.', 'ok');
+}
+
+async function save() {
+  busy($('saveBtn'), true);
+  setMsg('e-msg', 'Đang lưu…');
+  try {
+    await persist({ key: S.key, salt: S.salt, iter: S.iter, token: S.token });
+  } catch (e) {
+    setMsg('e-msg', e.message, 'err');
+  } finally {
+    busy($('saveBtn'), false);
+  }
+}
+
+async function applySettings() {
+  const np = $('n-pw').value;
+  const nt = $('n-token').value.trim();
+  if (!np && !nt) return setMsg('e-msg', 'Chưa nhập gì để đổi.', 'err');
+  if (np && np.length < 12) return setMsg('e-msg', 'Mật khẩu mới cần ít nhất 12 ký tự.', 'err');
+  busy($('applyBtn'), true);
+  setMsg('e-msg', 'Đang xử lý…');
+  try {
+    const next = { key: S.key, salt: S.salt, iter: S.iter, token: nt || S.token };
+    if (np) {
+      next.salt = crypto.getRandomValues(new Uint8Array(16));
+      next.iter = ITER;
+      next.key = await deriveKey(np, next.salt, next.iter);
+    }
+    await persist(next, 'Đã cập nhật và lưu.');
+    $('n-pw').value = '';
+    $('n-token').value = '';
+  } catch (e) {
+    setMsg('e-msg', e.message, 'err');
+  } finally {
+    busy($('applyBtn'), false);
+  }
+}
+
+function lock() {
+  S.key = null; S.token = null; S.salt = null; S.file = null; S.sha = null;
+  S.dirty = false; S.saved = '';
+  $('text').value = '';
+  $('n-pw').value = '';
+  $('n-token').value = '';
+  init();
+}
+
+/* ---------- tự khóa khi không hoạt động ---------- */
+let idleTimer = null;
+function resetIdle() {
+  clearTimeout(idleTimer);
+  if (S.key) {
+    idleTimer = setTimeout(() => { if (S.key && !S.dirty) lock(); else resetIdle(); }, IDLE_MS);
+  }
+}
+['keydown', 'pointerdown', 'input'].forEach(t => document.addEventListener(t, resetIdle, { passive: true }));
+
+/* ---------- sự kiện ---------- */
+$('setupForm').addEventListener('submit', doSetup);
+$('unlockForm').addEventListener('submit', doUnlock);
+$('saveBtn').addEventListener('click', save);
+$('lockBtn').addEventListener('click', () => {
+  if (S.dirty && !confirm('Còn thay đổi chưa lưu. Vẫn khóa?')) return;
+  lock();
+});
+$('applyBtn').addEventListener('click', applySettings);
+$('text').addEventListener('input', () => {
+  S.dirty = ($('text').value !== S.saved);
+  updateStatus();
+});
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && !$('v-editor').hidden) {
+    e.preventDefault();
+    save();
+  }
+});
+window.addEventListener('beforeunload', e => {
+  if (S.dirty) { e.preventDefault(); e.returnValue = ''; }
+});
+$('r-btn').addEventListener('click', () => {
+  const owner = $('r-owner').value.trim();
+  const repo = $('r-repo').value.trim();
+  if (!owner || !repo) return;
+  try { localStorage.setItem('notes_repo', JSON.stringify({ owner, repo })); } catch (e) {}
+  S.owner = owner; S.repo = repo;
+  $('repoBox').open = false;
+  init();
+});
+
+/* ---------- khởi động ---------- */
+Object.assign(S, detectRepo());
+init();
+})();
+</script>
+</body>
+</html>
