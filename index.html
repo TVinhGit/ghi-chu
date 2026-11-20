@@ -6,8 +6,8 @@
 <meta name="robots" content="noindex,nofollow">
 <title>Ghi chú</title>
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--text:#1c1e21;--muted:#6b7280;--accent:#2563eb;--border:#d7dbe0;--err:#c62828;--ok:#2e7d32;--sel:#e8effd}
-@media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1c1f24;--text:#e6e8eb;--muted:#9aa3ad;--accent:#4c8dff;--border:#333a42;--err:#ff6b6b;--ok:#66bb6a;--sel:#26324a}}
+:root{--bg:#f5f6f8;--card:#fff;--text:#1c1e21;--muted:#6b7280;--accent:#2563eb;--btn:#2563eb;--border:#d7dbe0;--err:#c62828;--ok:#2e7d32;--sel:#e8effd}
+@media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1c1f24;--text:#e6e8eb;--muted:#9aa3ad;--accent:#4c8dff;--btn:#2f6fe0;--border:#333a42;--err:#ff6b6b;--ok:#66bb6a;--sel:#26324a}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -16,10 +16,10 @@ body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-ap
 .narrow{max-width:440px;margin:8vh auto 0}
 h1{font-size:1.25rem;margin:0 0 12px}
 label{display:block;margin:12px 0 0;font-size:.9rem;color:var(--muted)}
-input,textarea{width:100%;margin-top:4px;padding:10px 12px;font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:8px}
+input,textarea{width:100%;margin-top:4px;padding:10px 12px;font:inherit;font-size:1rem;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:8px}
 input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:0}
 textarea{min-height:55vh;resize:vertical;line-height:1.6}
-button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:10px 16px;margin-top:16px;color:#fff;background:var(--accent)}
+button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:10px 16px;margin-top:16px;color:#fff;background:var(--btn)}
 button.ghost{background:transparent;color:var(--accent);border:1px solid var(--border)}
 button.danger{color:var(--err)}
 button:disabled{opacity:.6;cursor:wait}
@@ -161,7 +161,7 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
     </details>
   </section>
 
-  <details id="repoBox" class="repo" hidden>
+  <details id="repoBox" class="repo">
     <summary id="repoLabel">Repo</summary>
     <div class="row">
       <input id="r-owner" placeholder="tên tài khoản GitHub" autocomplete="off">
@@ -252,9 +252,7 @@ async function putFile(token, fileObj, sha) {
   if (r.status === 401) throw new Error('Token sai hoặc đã hết hạn.');
   if (r.status === 403 || r.status === 404) throw new Error('Token không ghi được vào repo này. Kiểm tra token có quyền Contents: Read and write và đúng repo.');
   if (r.status === 409 || r.status === 422) {
-    const e = new Error('File trên GitHub đã thay đổi ở nơi khác. Hãy sao chép nội dung bạn vừa sửa, bấm Khóa rồi mở lại.');
-    e.conflict = true;
-    throw e;
+    throw new Error('File trên GitHub đã thay đổi ở nơi khác. Hãy sao chép nội dung bạn vừa sửa, bấm Khóa rồi mở lại.');
   }
   throw new Error('Lỗi khi lưu: ' + r.status);
 }
@@ -359,6 +357,7 @@ function askPin() {
   $('p-pw').focus();
 }
 async function confirmPin() {
+  if ($('pinOk').disabled) return;
   const pw = $('p-pw').value;
   if (!pw) return setMsg('e-msg', 'Hãy nhập mật khẩu để ghim hoặc bỏ ghim.', 'err');
   busy($('pinOk'), true);
@@ -387,6 +386,7 @@ function askAdd() {
   $('a-pw').focus();
 }
 async function confirmAdd() {
+  if ($('addOk').disabled) return;
   const pw = $('a-pw').value;
   if (!pw) return setMsg('e-msg', 'Hãy nhập mật khẩu để thêm mục.', 'err');
   busy($('addOk'), true);
@@ -422,8 +422,10 @@ function askDelete() {
   $('d-pw').focus();
 }
 async function confirmDelete() {
+  if ($('delOk').disabled) return;
   const pw = $('d-pw').value;
   if (!pw) return setMsg('e-msg', 'Hãy nhập mật khẩu để xóa.', 'err');
+  const n = curNote();
   busy($('delOk'), true);
   setMsg('e-msg', 'Đang kiểm tra mật khẩu…');
   try {
@@ -432,7 +434,7 @@ async function confirmDelete() {
       $('d-pw').select();
       return;
     }
-    const n = curNote();
+    if (S.notes.indexOf(n) < 0) return;
     const pos = sortedNotes().indexOf(n);
     S.notes.splice(S.notes.indexOf(n), 1);
     if (!S.notes.length) S.notes.push({ id: newId(), title: 'Ghi chú 1', text: '', pinned: false });
@@ -543,18 +545,20 @@ function openEditor(notes) {
 }
 
 async function persist(next, okText) {
+  const sess = session;
   const snap = JSON.stringify(S.notes);
   const file = await makeFile(next.key, next.salt, next.iter, { notes: JSON.parse(snap), token: next.token });
   const sha = await putFile(next.token, file, S.sha);
   S.sha = sha;
   S.file = file;
+  if (sess !== session) return;   // đã Khóa trong lúc lưu: không khôi phục key/token
   S.key = next.key; S.salt = next.salt; S.iter = next.iter; S.token = next.token;
   S.saved = snap;
   refreshDirty();
   setMsg('e-msg', okText || 'Đã lưu lên GitHub.', 'ok');
 }
 
-let saving = false, saveAgain = false;
+let saving = false, saveAgain = false, session = 0;
 async function save() {
   if (!S.key) return;
   if (saving) { saveAgain = true; return; }
@@ -609,6 +613,7 @@ async function applySettings() {
 }
 
 function lock() {
+  session++; saveAgain = false;
   S.key = null; S.token = null; S.salt = null; S.file = null; S.sha = null;
   S.notes = []; S.cur = null; S.dirty = false; S.saved = '';
   $('text').value = '';
@@ -688,10 +693,11 @@ $('r-btn').addEventListener('click', () => {
   const owner = $('r-owner').value.trim();
   const repo = $('r-repo').value.trim();
   if (!owner || !repo) return;
+  if (S.dirty && !confirm('Còn thay đổi chưa lưu. Vẫn đổi repo?')) return;
   try { localStorage.setItem('notes_repo', JSON.stringify({ owner, repo })); } catch (e) {}
   S.owner = owner; S.repo = repo;
   $('repoBox').open = false;
-  init();
+  lock();
 });
 
 /* ---------- khởi động ---------- */
