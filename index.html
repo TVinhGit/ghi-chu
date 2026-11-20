@@ -47,6 +47,8 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
 #q{margin:0 0 8px;-webkit-appearance:none;appearance:none}
 .hint{margin:6px 0 0;font-size:.8rem}
 .block{width:100%}
+.btn-row{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+.btn-row button{margin-top:0}
 @media (max-width:640px){
   .wrap{padding:10px}
   .card{padding:14px;margin-top:10px;border-radius:10px}
@@ -60,8 +62,7 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
   .bar button{flex:0 0 auto}
   .bar .spacer{flex:1 1 0;min-width:0}
   textarea{min-height:45vh;min-height:45dvh}
-  #pinBtn,#delBtn,#delBox button,#pinBox button,#addBox button{width:calc(50% - 8px)}
-  #pinBtn{margin-right:8px!important}
+  .btn-row button{flex:1 1 0}
 }
 .pw{position:relative;display:block;margin-top:4px}
 .pw input{margin-top:0;padding-right:44px}
@@ -128,8 +129,10 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
           <label>Nhập mật khẩu để thêm mục
             <input id="a-pw" type="password" autocomplete="off">
           </label>
-          <button id="addOk" type="button" class="ghost">Xác nhận</button>
-          <button id="addCancel" type="button" class="ghost">Hủy</button>
+          <div class="btn-row">
+            <button id="addOk" type="button" class="ghost">Xác nhận</button>
+            <button id="addCancel" type="button" class="ghost">Hủy</button>
+          </div>
         </div>
         <p id="dragHint" class="muted hint">Giữ một mục rồi kéo để đổi vị trí.</p>
       </aside>
@@ -140,21 +143,27 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
         <label>Nội dung
           <textarea id="text" spellcheck="false"></textarea>
         </label>
-        <button id="pinBtn" type="button" class="ghost" style="margin-right:8px">Ghim mục này</button>
-        <button id="delBtn" type="button" class="ghost danger">Xóa mục này</button>
+        <div class="btn-row" id="noteActions">
+          <button id="pinBtn" type="button" class="ghost">Ghim mục này</button>
+          <button id="delBtn" type="button" class="ghost danger">Xóa mục này</button>
+        </div>
         <div id="delBox" hidden>
           <label>Nhập mật khẩu để xóa mục "<span id="d-name"></span>"
             <input id="d-pw" type="password" autocomplete="off">
           </label>
-          <button id="delOk" type="button" class="ghost danger">Xác nhận xóa</button>
-          <button id="delCancel" type="button" class="ghost">Hủy</button>
+          <div class="btn-row">
+            <button id="delOk" type="button" class="ghost danger">Xác nhận xóa</button>
+            <button id="delCancel" type="button" class="ghost">Hủy</button>
+          </div>
         </div>
         <div id="pinBox" hidden>
           <label>Nhập mật khẩu để <span id="p-action"></span> mục "<span id="p-name"></span>"
             <input id="p-pw" type="password" autocomplete="off">
           </label>
-          <button id="pinOk" type="button" class="ghost">Xác nhận</button>
-          <button id="pinCancel" type="button" class="ghost">Hủy</button>
+          <div class="btn-row">
+            <button id="pinOk" type="button" class="ghost">Xác nhận</button>
+            <button id="pinCancel" type="button" class="ghost">Hủy</button>
+          </div>
         </div>
       </div>
     </div>
@@ -252,7 +261,9 @@ async function fetchFile() {
 }
 
 async function putFile(token, fileObj, sha) {
-  const body = { message: 'update', content: btoa(JSON.stringify(fileObj)) };
+  // Dùng TextEncoder + toB64 để an toàn với cả ký tự UTF-8 nếu mở rộng sau này
+  const contentB64 = toB64(enc.encode(JSON.stringify(fileObj)));
+  const body = { message: 'update', content: contentB64 };
   if (sha) body.sha = sha;
   const r = await fetch(fileUrl(), {
     method: 'PUT',
@@ -283,15 +294,20 @@ function detectRepo() {
 /* ---------- dữ liệu nhiều mục ---------- */
 function normalize(data) {
   let notes = [];
+  const seen = new Set();
   if (data && Array.isArray(data.notes)) {
-    notes = data.notes.map(n => ({
-      id: String(n.id || newId()),
-      title: String(n.title || ''),
-      text: String(n.text || ''),
-      pinned: !!n.pinned
-    }));
+    notes = data.notes.map(n => {
+      let id = String(n.id || '');
+      while (!id || seen.has(id)) id = newId();
+      seen.add(id);
+      return {
+        id,
+        title: String(n.title || ''),
+        text: String(n.text || ''),
+        pinned: !!n.pinned
+      };
+    });
   } else if (data && typeof data.text === 'string') {
-    // định dạng cũ (một khối văn bản duy nhất)
     notes = [{ id: newId(), title: 'Ghi chú 1', text: data.text, pinned: false }];
   }
   if (!notes.length) notes = [{ id: newId(), title: 'Ghi chú 1', text: '', pinned: false }];
@@ -305,9 +321,10 @@ function refreshDirty() {
 function sortedNotes() {
   return S.notes.filter(n => n.pinned).concat(S.notes.filter(n => !n.pinned));
 }
+
 /* ---------- tìm kiếm ---------- */
 function fold(s) {
-  return String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+  return String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd');
 }
 function queryTokens() { return fold(S.query).split(/\s+/).filter(Boolean); }
 function visibleNotes() {
@@ -315,7 +332,8 @@ function visibleNotes() {
   const tk = queryTokens();
   if (!tk.length) return all;
   return all.filter(n => {
-    const h = fold(n.title + '\n' + n.text);
+    const h = fold(n.title + '
+' + n.text);
     return tk.every(t => h.includes(t));
   });
 }
@@ -335,9 +353,17 @@ function jumpToMatch() {
     if (i >= 0 && (at < 0 || i < at)) { at = i; len = t.length; }
   });
   if (at < 0) return;
-  ta.value = full.slice(0, at);
-  const h = ta.scrollHeight;
-  ta.value = full;
+
+  // Đo chiều cao cuộn thông qua phần tử ẩn thay vì ghi đè ta.value (giữ nguyên undo history)
+  const mirror = document.createElement('div');
+  const cs = getComputedStyle(ta);
+  mirror.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;left:-9999px;top:0;'
+    + `width:${ta.clientWidth}px;font:${cs.font};padding:${cs.padding};border:${cs.border};line-height:${cs.lineHeight};letter-spacing:${cs.letterSpacing};`;
+  mirror.textContent = full.slice(0, at);
+  document.body.appendChild(mirror);
+  const h = mirror.scrollHeight;
+  document.body.removeChild(mirror);
+
   if (window.matchMedia('(pointer:fine)').matches) {
     ta.focus({ preventScroll: true });
     ta.setSelectionRange(at, at + len);
@@ -360,7 +386,7 @@ function moveNote(note, others, dropIdx) {
   if (S.notes.map(x => x.id).join() === before) return;
   renderList();
   refreshDirty();
-  save();
+  setMsg('e-msg', 'Đã đổi vị trí. Bấm Lưu để cập nhật lên GitHub.', 'ok');
 }
 
 function attachDrag(btn, note) {
@@ -510,16 +536,16 @@ function addNote() {
   clearSearch();
   switchTo(n.id);
   refreshDirty();
+  setMsg('e-msg', 'Đã thêm mục mới. Bấm Lưu để cập nhật lên GitHub.', 'ok');
   $('title').focus();
   $('title').select();
-  save();
 }
 function togglePin() {
   const n = curNote();
   n.pinned = !n.pinned;
   renderList();
   refreshDirty();
-  save();
+  setMsg('e-msg', (n.pinned ? 'Đã ghim mục.' : 'Đã bỏ ghim mục.') + ' Bấm Lưu để cập nhật lên GitHub.', 'ok');
 }
 function hidePinBox() {
   $('pinBox').hidden = true;
@@ -548,7 +574,6 @@ async function confirmPin() {
       return;
     }
     hidePinBox();
-    setMsg('e-msg', '');
     togglePin();
   } finally {
     busy($('pinOk'), false);
@@ -577,7 +602,6 @@ async function confirmAdd() {
       return;
     }
     hideAddBox();
-    setMsg('e-msg', '');
     addNote();
   } finally {
     busy($('addOk'), false);
@@ -614,11 +638,26 @@ async function confirmDelete() {
       return;
     }
     if (S.notes.indexOf(n) < 0) return;
-    const pos = sortedNotes().indexOf(n);
+    const beforeVisible = visibleNotes();
+    const posInVisible = beforeVisible.indexOf(n);
+    const posInAll = sortedNotes().indexOf(n);
+
     S.notes.splice(S.notes.indexOf(n), 1);
-    if (!S.notes.length) S.notes.push({ id: newId(), title: 'Ghi chú 1', text: '', pinned: false });
-    const after = sortedNotes();
-    switchTo(after[Math.min(pos, after.length - 1)].id);
+    if (!S.notes.length) {
+      clearSearch();
+      S.notes.push({ id: newId(), title: 'Ghi chú 1', text: '', pinned: false });
+    }
+
+    const afterVisible = visibleNotes();
+    let nextNote;
+    if (afterVisible.length && posInVisible >= 0) {
+      nextNote = afterVisible[Math.min(posInVisible, afterVisible.length - 1)];
+    } else {
+      const afterAll = sortedNotes();
+      nextNote = afterAll[Math.min(Math.max(0, posInAll), afterAll.length - 1)];
+    }
+
+    switchTo(nextNote.id);
     refreshDirty();
     setMsg('e-msg', 'Đã xóa mục. Bấm Lưu để cập nhật lên GitHub.', 'ok');
   } finally {
@@ -762,7 +801,7 @@ async function applySettings() {
   setMsg('e-msg', 'Đang xử lý…');
   try {
     if (!(await verifyPassword(o1))) throw new Error('Mật khẩu hiện tại không đúng.');
-    const next ={ key: S.key, salt: S.salt, iter: S.iter, token: nt || S.token };
+    const next = { key: S.key, salt: S.salt, iter: S.iter, token: nt || S.token };
     if (np) {
       next.salt = crypto.getRandomValues(new Uint8Array(16));
       next.iter = ITER;
@@ -782,9 +821,13 @@ async function applySettings() {
   }
 }
 
-function lock() {
+function lock(reasonMsg) {
   session++; saveAgain = false;
-  S.key = null; S.token = null; S.salt = null; S.file = null; S.sha = null;
+  clearTimeout(idleTimer);
+  // Giữ lại S.file và S.sha đã có để mở khóa lại ngay lập tức mà không cần fetch lại từ GitHub
+  const hasCachedFile = !!(S.file && S.sha);
+  S.key = null; S.token = null; S.salt = null;
+  if (!hasCachedFile) { S.file = null; S.sha = null; }
   S.notes = []; S.cur = null; S.dirty = false; S.saved = '';
   $('text').value = '';
   $('title').value = '';
@@ -799,7 +842,13 @@ function lock() {
   $('n-pw').value = '';
   $('n-token').value = '';
   resetEyes();
-  init();
+  if (hasCachedFile) {
+    setMsg('u-msg', reasonMsg || '');
+    show('unlock');
+    $('u-pw').focus();
+  } else {
+    init();
+  }
 }
 
 /* ---------- tự khóa khi không hoạt động ---------- */
@@ -807,7 +856,15 @@ let idleTimer = null;
 function resetIdle() {
   clearTimeout(idleTimer);
   if (S.key) {
-    idleTimer = setTimeout(() => { if (S.key && !S.dirty) lock(); else resetIdle(); }, IDLE_MS);
+    idleTimer = setTimeout(() => {
+      if (!S.key) return;
+      if (S.dirty) {
+        setMsg('e-msg', 'Cảnh báo: Bạn đã không thao tác 10 phút và còn thay đổi chưa lưu!', 'err');
+        resetIdle();
+      } else {
+        lock('Đã tự động khóa sau 10 phút không hoạt động.');
+      }
+    }, IDLE_MS);
   }
 }
 ['keydown', 'pointerdown', 'input'].forEach(t => document.addEventListener(t, resetIdle, { passive: true }));
@@ -867,6 +924,7 @@ window.addEventListener('beforeunload', e => {
 
 /* ---------- khởi động ---------- */
 Object.assign(S, detectRepo());
+
 /* ---------- nút con mắt hiện/ẩn mật khẩu ---------- */
 const EYE_SVG = '<svg class="on" viewBox="0 0 24 24" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>'
   + '<svg class="off" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.94 17.94A10.9 10.9 0 0 1 12 19C5 19 1 12 1 12a19.8 19.8 0 0 1 5.06-5.94M9.9 5.24A10.4 10.4 0 0 1 12 5c7 0 11 7 11 7a19.7 19.7 0 0 1-3.17 4.19M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="M1 1l22 22"/></svg>';
