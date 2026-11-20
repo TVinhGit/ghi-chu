@@ -32,10 +32,6 @@ button:disabled{opacity:.6;cursor:wait}
 .msg.ok{color:var(--ok)}
 details{margin-top:14px}
 summary{cursor:pointer;color:var(--muted);font-size:.9rem}
-.repo{margin:20px auto 0;max-width:980px}
-.row{display:flex;gap:8px;flex-wrap:wrap}
-.row input{flex:1;min-width:140px}
-.row button{margin-top:4px}
 .layout{display:grid;grid-template-columns:210px 1fr;gap:16px;margin-top:12px}
 .notelist{display:flex;flex-direction:column;gap:4px}
 .notelist button{margin:0;text-align:left;color:var(--text);background:transparent;border:1px solid transparent;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%}
@@ -161,15 +157,6 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
     </details>
   </section>
 
-  <details id="repoBox" class="repo">
-    <summary id="repoLabel">Repo</summary>
-    <div class="row">
-      <input id="r-owner" placeholder="tên tài khoản GitHub" autocomplete="off">
-      <input id="r-repo" placeholder="tên repo" autocomplete="off">
-      <button id="r-btn" type="button" class="ghost">Dùng repo này</button>
-    </div>
-  </details>
-
 </div>
 
 <script>
@@ -259,10 +246,6 @@ async function putFile(token, fileObj, sha) {
 
 /* ---------- xác định repo ---------- */
 function detectRepo() {
-  try {
-    const s = JSON.parse(localStorage.getItem('notes_repo') || 'null');
-    if (s && s.owner && s.repo) return s;
-  } catch (e) {}
   const h = location.hostname;
   if (h.endsWith('.github.io')) {
     const owner = h.slice(0, -'.github.io'.length);
@@ -270,7 +253,7 @@ function detectRepo() {
     if (!seg || /\.html?$/.test(seg)) seg = owner + '.github.io';
     return { owner, repo: seg };
   }
-  return { owner: '', repo: '' };
+  return { owner: 'tvinhgit', repo: 'ghi-chu' };
 }
 
 /* ---------- dữ liệu nhiều mục ---------- */
@@ -451,15 +434,6 @@ async function confirmDelete() {
 async function init() {
   show('loading');
   setMsg('loadMsg', 'Đang tải…');
-  $('repoLabel').textContent = (S.owner && S.repo) ? `Repo: ${S.owner}/${S.repo}` : 'Repo (chưa xác định)';
-  $('r-owner').value = S.owner;
-  $('r-repo').value = S.repo;
-  if (!S.owner || !S.repo) {
-    setMsg('loadMsg', 'Chưa xác định được repo. Mở mục "Repo" bên dưới, nhập tên tài khoản và tên repo.', 'err');
-    $('repoBox').hidden = false;
-    $('repoBox').open = true;
-    return;
-  }
   try {
     const r = await fetchFile();
     if (!r) {
@@ -688,16 +662,6 @@ document.addEventListener('keydown', e => {
 });
 window.addEventListener('beforeunload', e => {
   if (S.dirty) { e.preventDefault(); e.returnValue = ''; }
-});
-$('r-btn').addEventListener('click', () => {
-  const owner = $('r-owner').value.trim();
-  const repo = $('r-repo').value.trim();
-  if (!owner || !repo) return;
-  if (S.dirty && !confirm('Còn thay đổi chưa lưu. Vẫn đổi repo?')) return;
-  try { localStorage.setItem('notes_repo', JSON.stringify({ owner, repo })); } catch (e) {}
-  S.owner = owner; S.repo = repo;
-  $('repoBox').open = false;
-  lock();
 });
 
 /* ---------- khởi động ---------- */
