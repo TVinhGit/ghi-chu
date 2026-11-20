@@ -39,6 +39,13 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
 .notelist{display:flex;flex-direction:column;gap:4px}
 .notelist button{margin:0;text-align:left;color:var(--text);background:transparent;border:1px solid transparent;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%}
 .notelist button.active{background:var(--sel);border-color:var(--accent)}
+.notelist button{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.notelist button.dragging{position:relative;z-index:5;opacity:.85;background:var(--sel);border-color:var(--accent)}
+.notelist button.db{box-shadow:inset 0 3px 0 var(--accent)}
+.notelist button.da{box-shadow:inset 0 -3px 0 var(--accent)}
+.notelist p{margin:6px 0}
+#q{margin:0 0 8px;-webkit-appearance:none;appearance:none}
+.hint{margin:6px 0 0;font-size:.8rem}
 .block{width:100%}
 @media (max-width:640px){
   .wrap{padding:10px}
@@ -47,6 +54,8 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
   .layout{grid-template-columns:minmax(0,1fr);gap:12px}
   .notelist{flex-direction:row;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:6px;scrollbar-width:thin}
   .notelist button{width:auto;flex:0 0 auto;max-width:60vw;min-height:44px}
+  .notelist button.db{box-shadow:inset 3px 0 0 var(--accent)}
+  .notelist button.da{box-shadow:inset -3px 0 0 var(--accent)}
   button{min-height:44px}
   .bar button{flex:0 0 auto}
   .bar .spacer{flex:1 1 0;min-width:0}
@@ -111,6 +120,8 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
 
     <div class="layout">
       <aside>
+        <input id="q" type="search" placeholder="Tìm ghi chú…" autocomplete="off" enterkeyhint="search" aria-label="Tìm ghi chú">
+        <p id="qInfo" class="muted hint" style="margin:0 0 6px" hidden></p>
         <div id="noteList" class="notelist"></div>
         <button id="addBtn" type="button" class="ghost block">+ Thêm mục</button>
         <div id="addBox" hidden>
@@ -120,6 +131,7 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
           <button id="addOk" type="button" class="ghost">Xác nhận</button>
           <button id="addCancel" type="button" class="ghost">Hủy</button>
         </div>
+        <p id="dragHint" class="muted hint">Giữ một mục rồi kéo để đổi vị trí.</p>
       </aside>
       <div>
         <label style="margin-top:0">Tên mục
@@ -184,7 +196,7 @@ const dec = new TextDecoder();
 const $ = id => document.getElementById(id);
 
 const S = { owner: '', repo: '', sha: null, file: null, key: null, salt: null,
-            iter: ITER, token: null, notes: [], cur: null, dirty: false, saved: '' };
+            iter: ITER, token: null, notes: [], cur: null, dirty: false, saved: '', query: '' };
 
 /* ---------- tiện ích ---------- */
 function show(name) {
@@ -293,18 +305,189 @@ function refreshDirty() {
 function sortedNotes() {
   return S.notes.filter(n => n.pinned).concat(S.notes.filter(n => !n.pinned));
 }
+/* ---------- tìm kiếm ---------- */
+function fold(s) {
+  return String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+}
+function queryTokens() { return fold(S.query).split(/\s+/).filter(Boolean); }
+function visibleNotes() {
+  const all = sortedNotes();
+  const tk = queryTokens();
+  if (!tk.length) return all;
+  return all.filter(n => {
+    const h = fold(n.title + '\n' + n.text);
+    return tk.every(t => h.includes(t));
+  });
+}
+function clearSearch() {
+  S.query = '';
+  $('q').value = '';
+}
+function jumpToMatch() {
+  const tk = queryTokens();
+  const ta = $('text');
+  const full = ta.value;
+  const f = fold(full);
+  if (!tk.length || f.length !== full.length) return;
+  let at = -1, len = 0;
+  tk.forEach(t => {
+    const i = f.indexOf(t);
+    if (i >= 0 && (at < 0 || i < at)) { at = i; len = t.length; }
+  });
+  if (at < 0) return;
+  ta.value = full.slice(0, at);
+  const h = ta.scrollHeight;
+  ta.value = full;
+  if (window.matchMedia('(pointer:fine)').matches) {
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(at, at + len);
+  }
+  ta.scrollTop = Math.max(0, h - ta.clientHeight / 2);
+}
+
+/* ---------- giữ để kéo đổi vị trí ---------- */
+let dragJustEnded = false;
+const HOLD_MS = 380;
+function isRowLayout() { return getComputedStyle($('noteList')).flexDirection === 'row'; }
+
+function moveNote(note, others, dropIdx) {
+  const ids = others.map(el => el.dataset.id);
+  ids.splice(dropIdx, 0, note.id);
+  const group = ids.map(id => S.notes.find(x => x.id === id)).filter(Boolean);
+  const rest = S.notes.filter(x => x.pinned !== note.pinned);
+  const before = S.notes.map(x => x.id).join();
+  S.notes = note.pinned ? group.concat(rest) : rest.concat(group);
+  if (S.notes.map(x => x.id).join() === before) return;
+  renderList();
+  refreshDirty();
+  save();
+}
+
+function attachDrag(btn, note) {
+  const box = $('noteList');
+  let timer = null, active = false, pid = null, row = false;
+  let sx = 0, sy = 0, lastX = 0, lastY = 0, scroll0 = 0, scrollTimer = null;
+  let others = [], dropIdx = 0;
+
+  function cancelHold() { clearTimeout(timer); timer = null; }
+
+  function update() {
+    const p = row ? lastX : lastY;
+    const d = row ? (lastX - sx) + (box.scrollLeft - scroll0) : (lastY - sy);
+    btn.style.transform = row ? 'translateX(' + d + 'px)' : 'translateY(' + d + 'px)';
+    let k = 0;
+    others.forEach(el => {
+      const r = el.getBoundingClientRect();
+      const m = row ? r.left + r.width / 2 : r.top + r.height / 2;
+      if (m < p) k++;
+    });
+    dropIdx = k;
+    others.forEach(el => el.classList.remove('db', 'da'));
+    if (others.length) {
+      if (k < others.length) others[k].classList.add('db');
+      else others[others.length - 1].classList.add('da');
+    }
+  }
+
+  function autoScroll() {
+    if (!active || !row) return;
+    const r = box.getBoundingClientRect();
+    const b0 = box.scrollLeft;
+    if (lastX < r.left + 36) box.scrollLeft -= 10;
+    else if (lastX > r.right - 36) box.scrollLeft += 10;
+    if (box.scrollLeft !== b0) update();
+  }
+
+  function start() {
+    timer = null;
+    active = true;
+    row = isRowLayout();
+    scroll0 = row ? box.scrollLeft : 0;
+    others = Array.from(box.children).filter(el =>
+      el !== btn && el.tagName === 'BUTTON' && el.dataset.pinned === btn.dataset.pinned);
+    btn.classList.add('dragging');
+    try { btn.setPointerCapture(pid); } catch (e) { /* bỏ qua */ }
+    if (navigator.vibrate) navigator.vibrate(15);
+    scrollTimer = setInterval(autoScroll, 16);
+    update();
+  }
+
+  function finish(commit) {
+    cancelHold();
+    if (!active) return;
+    active = false;
+    clearInterval(scrollTimer);
+    try { btn.releasePointerCapture(pid); } catch (e) { /* bỏ qua */ }
+    btn.classList.remove('dragging');
+    btn.style.transform = '';
+    others.forEach(el => el.classList.remove('db', 'da'));
+    dragJustEnded = true;
+    setTimeout(() => { dragJustEnded = false; }, 80);
+    if (commit) moveNote(note, others, dropIdx);
+  }
+
+  btn.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (active) return;
+    pid = e.pointerId;
+    sx = lastX = e.clientX;
+    sy = lastY = e.clientY;
+    cancelHold();
+    timer = setTimeout(start, HOLD_MS);
+  });
+  btn.addEventListener('pointermove', e => {
+    if (e.pointerId !== pid) return;
+    if (!active) {
+      if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 8) cancelHold();
+      return;
+    }
+    lastX = e.clientX;
+    lastY = e.clientY;
+    update();
+  });
+  btn.addEventListener('pointerup', e => {
+    if (e.pointerId !== pid) return;
+    if (active) finish(true); else cancelHold();
+  });
+  btn.addEventListener('pointercancel', e => {
+    if (e.pointerId !== pid) return;
+    if (active) finish(false); else cancelHold();
+  });
+  btn.addEventListener('pointerleave', () => { if (!active) cancelHold(); });
+  btn.addEventListener('touchmove', e => { if (active) e.preventDefault(); }, { passive: false });
+  btn.addEventListener('contextmenu', e => { if (timer || active) e.preventDefault(); });
+}
+
 function renderList() {
   const box = $('noteList');
   box.textContent = '';
-  sortedNotes().forEach(n => {
+  const list = visibleNotes();
+  const searching = queryTokens().length > 0;
+  list.forEach(n => {
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = (n.pinned ? '📌 ' : '') + (n.title.trim() || '(không tên)');
     b.title = b.textContent;
+    b.dataset.id = n.id;
+    b.dataset.pinned = n.pinned ? '1' : '0';
     if (n.id === S.cur) b.className = 'active';
-    b.addEventListener('click', () => switchTo(n.id));
+    b.addEventListener('click', () => {
+      if (dragJustEnded) return;
+      switchTo(n.id);
+      if (S.query) jumpToMatch();
+    });
+    if (!searching) attachDrag(b, n);
     box.appendChild(b);
   });
+  if (searching && !list.length) {
+    const p = document.createElement('p');
+    p.className = 'muted';
+    p.textContent = 'Không có mục nào khớp.';
+    box.appendChild(p);
+  }
+  $('qInfo').hidden = !searching;
+  $('qInfo').textContent = searching ? list.length + '/' + S.notes.length + ' mục khớp' : '';
+  $('dragHint').hidden = searching;
   $('pinBtn').textContent = curNote().pinned ? 'Bỏ ghim' : 'Ghim mục này';
 }
 function hideDelBox() {
@@ -324,6 +507,7 @@ function switchTo(id) {
 function addNote() {
   const n = { id: newId(), title: 'Ghi chú ' + (S.notes.length + 1), text: '', pinned: false };
   S.notes.push(n);
+  clearSearch();
   switchTo(n.id);
   refreshDirty();
   $('title').focus();
@@ -605,6 +789,7 @@ function lock() {
   $('text').value = '';
   $('title').value = '';
   $('noteList').textContent = '';
+  clearSearch();
   hideDelBox();
   hidePinBox();
   hideAddBox();
@@ -642,6 +827,10 @@ $('addCancel').addEventListener('click', hideAddBox);
 $('a-pw').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); confirmAdd(); }
   else if (e.key === 'Escape') hideAddBox();
+});
+$('q').addEventListener('input', () => {
+  S.query = $('q').value;
+  renderList();
 });
 $('pinBtn').addEventListener('click', askPin);
 $('pinOk').addEventListener('click', confirmPin);
