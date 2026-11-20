@@ -303,12 +303,14 @@ function addNote() {
   refreshDirty();
   $('title').focus();
   $('title').select();
+  save();
 }
 function togglePin() {
   const n = curNote();
   n.pinned = !n.pinned;
   renderList();
   refreshDirty();
+  save();
 }
 async function verifyPassword(pw) {
   try {
@@ -448,17 +450,22 @@ function openEditor(notes) {
 }
 
 async function persist(next, okText) {
-  const file = await makeFile(next.key, next.salt, next.iter, { notes: S.notes, token: next.token });
+  const snap = JSON.stringify(S.notes);
+  const file = await makeFile(next.key, next.salt, next.iter, { notes: JSON.parse(snap), token: next.token });
   const sha = await putFile(next.token, file, S.sha);
   S.sha = sha;
   S.file = file;
   S.key = next.key; S.salt = next.salt; S.iter = next.iter; S.token = next.token;
-  S.saved = JSON.stringify(S.notes);
+  S.saved = snap;
   refreshDirty();
   setMsg('e-msg', okText || 'Đã lưu lên GitHub.', 'ok');
 }
 
+let saving = false, saveAgain = false;
 async function save() {
+  if (!S.key) return;
+  if (saving) { saveAgain = true; return; }
+  saving = true;
   busy($('saveBtn'), true);
   setMsg('e-msg', 'Đang lưu…');
   try {
@@ -466,7 +473,9 @@ async function save() {
   } catch (e) {
     setMsg('e-msg', e.message, 'err');
   } finally {
+    saving = false;
     busy($('saveBtn'), false);
+    if (saveAgain) { saveAgain = false; save(); }
   }
 }
 
@@ -475,6 +484,8 @@ async function applySettings() {
   const nt = $('n-token').value.trim();
   if (!np && !nt) return setMsg('e-msg', 'Chưa nhập gì để đổi.', 'err');
   if (np && np.length < 12) return setMsg('e-msg', 'Mật khẩu mới cần ít nhất 12 ký tự.', 'err');
+  if (saving) return setMsg('e-msg', 'Đang lưu, hãy thử lại sau vài giây.', 'err');
+  saving = true;
   busy($('applyBtn'), true);
   setMsg('e-msg', 'Đang xử lý…');
   try {
@@ -490,6 +501,7 @@ async function applySettings() {
   } catch (e) {
     setMsg('e-msg', e.message, 'err');
   } finally {
+    saving = false;
     busy($('applyBtn'), false);
   }
 }
