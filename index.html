@@ -97,6 +97,13 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
       <aside>
         <div id="noteList" class="notelist"></div>
         <button id="addBtn" type="button" class="ghost block">+ Thêm mục</button>
+        <div id="addBox" hidden>
+          <label>Nhập mật khẩu để thêm mục
+            <input id="a-pw" type="password" autocomplete="off">
+          </label>
+          <button id="addOk" type="button" class="ghost">Xác nhận</button>
+          <button id="addCancel" type="button" class="ghost">Hủy</button>
+        </div>
       </aside>
       <div>
         <label style="margin-top:0">Tên mục
@@ -312,6 +319,34 @@ function togglePin() {
   refreshDirty();
   save();
 }
+function hideAddBox() {
+  $('addBox').hidden = true;
+  $('a-pw').value = '';
+  $('addBtn').hidden = false;
+}
+function askAdd() {
+  $('addBtn').hidden = true;
+  $('addBox').hidden = false;
+  $('a-pw').focus();
+}
+async function confirmAdd() {
+  const pw = $('a-pw').value;
+  if (!pw) return setMsg('e-msg', 'Hãy nhập mật khẩu để thêm mục.', 'err');
+  busy($('addOk'), true);
+  setMsg('e-msg', 'Đang kiểm tra mật khẩu…');
+  try {
+    if (!(await verifyPassword(pw))) {
+      setMsg('e-msg', 'Sai mật khẩu, chưa thêm mục nào.', 'err');
+      $('a-pw').select();
+      return;
+    }
+    hideAddBox();
+    setMsg('e-msg', '');
+    addNote();
+  } finally {
+    busy($('addOk'), false);
+  }
+}
 async function verifyPassword(pw) {
   try {
     const f = S.file;
@@ -513,6 +548,7 @@ function lock() {
   $('title').value = '';
   $('noteList').textContent = '';
   hideDelBox();
+  hideAddBox();
   $('n-pw').value = '';
   $('n-token').value = '';
   init();
@@ -537,7 +573,13 @@ $('lockBtn').addEventListener('click', () => {
   lock();
 });
 $('applyBtn').addEventListener('click', applySettings);
-$('addBtn').addEventListener('click', addNote);
+$('addBtn').addEventListener('click', askAdd);
+$('addOk').addEventListener('click', confirmAdd);
+$('addCancel').addEventListener('click', hideAddBox);
+$('a-pw').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmAdd(); }
+  else if (e.key === 'Escape') hideAddBox();
+});
 $('pinBtn').addEventListener('click', togglePin);
 $('delBtn').addEventListener('click', askDelete);
 $('delOk').addEventListener('click', confirmDelete);
