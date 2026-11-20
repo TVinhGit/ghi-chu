@@ -105,7 +105,15 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
         <label>Nội dung
           <textarea id="text" spellcheck="false"></textarea>
         </label>
+        <button id="pinBtn" type="button" class="ghost" style="margin-right:8px">Ghim mục này</button>
         <button id="delBtn" type="button" class="ghost danger">Xóa mục này</button>
+        <div id="delBox" hidden>
+          <label>Nhập mật khẩu để xóa mục "<span id="d-name"></span>"
+            <input id="d-pw" type="password" autocomplete="off">
+          </label>
+          <button id="delOk" type="button" class="ghost danger">Xác nhận xóa</button>
+          <button id="delCancel" type="button" class="ghost">Hủy</button>
+        </div>
       </div>
     </div>
 
@@ -243,13 +251,14 @@ function normalize(data) {
     notes = data.notes.map(n => ({
       id: String(n.id || newId()),
       title: String(n.title || ''),
-      text: String(n.text || '')
+      text: String(n.text || ''),
+      pinned: !!n.pinned
     }));
   } else if (data && typeof data.text === 'string') {
     // định dạng cũ (một khối văn bản duy nhất)
-    notes = [{ id: newId(), title: 'Ghi chú 1', text: data.text }];
+    notes = [{ id: newId(), title: 'Ghi chú 1', text: data.text, pinned: false }];
   }
-  if (!notes.length) notes = [{ id: newId(), title: 'Ghi chú 1', text: '' }];
+  if (!notes.length) notes = [{ id: newId(), title: 'Ghi chú 1', text: '', pinned: false }];
   return notes;
 }
 function curNote() { return S.notes.find(n => n.id === S.cur) || S.notes[0]; }
@@ -257,42 +266,88 @@ function refreshDirty() {
   S.dirty = (JSON.stringify(S.notes) !== S.saved);
   $('status').textContent = S.dirty ? 'Chưa lưu thay đổi' : 'Đã lưu';
 }
+function sortedNotes() {
+  return S.notes.filter(n => n.pinned).concat(S.notes.filter(n => !n.pinned));
+}
 function renderList() {
   const box = $('noteList');
   box.textContent = '';
-  S.notes.forEach(n => {
+  sortedNotes().forEach(n => {
     const b = document.createElement('button');
     b.type = 'button';
-    b.textContent = n.title.trim() || '(không tên)';
+    b.textContent = (n.pinned ? '📌 ' : '') + (n.title.trim() || '(không tên)');
     b.title = b.textContent;
     if (n.id === S.cur) b.className = 'active';
     b.addEventListener('click', () => switchTo(n.id));
     box.appendChild(b);
   });
+  $('pinBtn').textContent = curNote().pinned ? 'Bỏ ghim' : 'Ghim mục này';
+}
+function hideDelBox() {
+  $('delBox').hidden = true;
+  $('d-pw').value = '';
+  $('delBtn').hidden = false;
 }
 function switchTo(id) {
   S.cur = id;
   const n = curNote();
   $('title').value = n.title;
   $('text').value = n.text;
+  hideDelBox();
   renderList();
 }
 function addNote() {
-  const n = { id: newId(), title: 'Ghi chú ' + (S.notes.length + 1), text: '' };
+  const n = { id: newId(), title: 'Ghi chú ' + (S.notes.length + 1), text: '', pinned: false };
   S.notes.push(n);
   switchTo(n.id);
   refreshDirty();
   $('title').focus();
   $('title').select();
 }
-function deleteNote() {
+function togglePin() {
   const n = curNote();
-  if (!confirm(`Xóa mục "${n.title.trim() || '(không tên)'}"? Việc xóa có hiệu lực sau khi bạn bấm Lưu.`)) return;
-  const i = S.notes.indexOf(n);
-  S.notes.splice(i, 1);
-  if (!S.notes.length) S.notes.push({ id: newId(), title: 'Ghi chú 1', text: '' });
-  switchTo(S.notes[Math.min(i, S.notes.length - 1)].id);
+  n.pinned = !n.pinned;
+  renderList();
   refreshDirty();
+}
+async function verifyPassword(pw) {
+  try {
+    const f = S.file;
+    const key = await deriveKey(pw, fromB64(f.salt), f.iter || ITER);
+    await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(f.iv) }, key, fromB64(f.ct));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+function askDelete() {
+  $('d-name').textContent = curNote().title.trim() || '(không tên)';
+  $('delBtn').hidden = true;
+  $('delBox').hidden = false;
+  $('d-pw').focus();
+}
+async function confirmDelete() {
+  const pw = $('d-pw').value;
+  if (!pw) return setMsg('e-msg', 'Hãy nhập mật khẩu để xóa.', 'err');
+  busy($('delOk'), true);
+  setMsg('e-msg', 'Đang kiểm tra mật khẩu…');
+  try {
+    if (!(await verifyPassword(pw))) {
+      setMsg('e-msg', 'Sai mật khẩu, chưa xóa mục nào.', 'err');
+      $('d-pw').select();
+      return;
+    }
+    const n = curNote();
+    const pos = sortedNotes().indexOf(n);
+    S.notes.splice(S.notes.indexOf(n), 1);
+    if (!S.notes.length) S.notes.push({ id: newId(), title: 'Ghi chú 1', text: '', pinned: false });
+    const after = sortedNotes();
+    switchTo(after[Math.min(pos, after.length - 1)].id);
+    refreshDirty();
+    setMsg('e-msg', 'Đã xóa mục. Bấm Lưu để cập nhật lên GitHub.', 'ok');
+  } finally {
+    busy($('delOk'), false);
+  }
 }
 
 /* ---------- luồng chính ---------- */
@@ -340,7 +395,7 @@ async function doSetup(ev) {
     const key = await deriveKey(pw, salt, ITER);
     const file = await makeFile(key, salt, ITER, { notes, token });
     const sha = await putFile(token, file, null);
-    S.key = key; S.salt = salt; S.iter = ITER; S.token = token; S.sha = sha;
+    S.key = key; S.salt = salt; S.iter = ITER; S.token = token; S.sha = sha; S.file = file;
     $('s-token').value = ''; $('s-pw').value = ''; $('s-pw2').value = '';
     openEditor(notes);
   } catch (e) {
@@ -396,6 +451,7 @@ async function persist(next, okText) {
   const file = await makeFile(next.key, next.salt, next.iter, { notes: S.notes, token: next.token });
   const sha = await putFile(next.token, file, S.sha);
   S.sha = sha;
+  S.file = file;
   S.key = next.key; S.salt = next.salt; S.iter = next.iter; S.token = next.token;
   S.saved = JSON.stringify(S.notes);
   refreshDirty();
@@ -444,6 +500,7 @@ function lock() {
   $('text').value = '';
   $('title').value = '';
   $('noteList').textContent = '';
+  hideDelBox();
   $('n-pw').value = '';
   $('n-token').value = '';
   init();
@@ -469,7 +526,14 @@ $('lockBtn').addEventListener('click', () => {
 });
 $('applyBtn').addEventListener('click', applySettings);
 $('addBtn').addEventListener('click', addNote);
-$('delBtn').addEventListener('click', deleteNote);
+$('pinBtn').addEventListener('click', togglePin);
+$('delBtn').addEventListener('click', askDelete);
+$('delOk').addEventListener('click', confirmDelete);
+$('delCancel').addEventListener('click', hideDelBox);
+$('d-pw').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmDelete(); }
+  else if (e.key === 'Escape') hideDelBox();
+});
 $('text').addEventListener('input', () => {
   curNote().text = $('text').value;
   refreshDirty();
