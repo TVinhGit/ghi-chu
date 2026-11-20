@@ -97,7 +97,7 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
     </details>
   </section>
 
-  <details id="repoBox" class="repo">
+  <details id="repoBox" class="repo" hidden>
     <summary id="repoLabel">Repo</summary>
     <div class="row">
       <input id="r-owner" placeholder="tên tài khoản GitHub" autocomplete="off">
@@ -216,6 +216,7 @@ async function init() {
   $('r-repo').value = S.repo;
   if (!S.owner || !S.repo) {
     setMsg('loadMsg', 'Chưa xác định được repo. Mở mục "Repo" bên dưới, nhập tên tài khoản và tên repo.', 'err');
+    $('repoBox').hidden = false;
     $('repoBox').open = true;
     return;
   }
