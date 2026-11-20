@@ -41,6 +41,9 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
 .notelist button{margin:0;text-align:left;color:var(--text);background:transparent;border:1px solid transparent;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%}
 .notelist button.active{background:var(--sel);border-color:var(--accent)}
 .block{width:100%}
+.pw{position:relative;margin-top:4px}
+.pw input{margin-top:0;padding-right:70px}
+.pw .eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);margin:0;padding:4px 10px;font-size:.8rem;background:transparent;color:var(--accent);border:1px solid var(--border)}
 @media (max-width:640px){
   .layout{grid-template-columns:1fr}
   .notelist{flex-direction:row;overflow-x:auto;padding-bottom:4px}
@@ -182,6 +185,7 @@ const S = { owner: '', repo: '', sha: null, file: null, key: null, salt: null,
 /* ---------- tiện ích ---------- */
 function show(name) {
   ['loading', 'setup', 'unlock', 'editor'].forEach(v => { $('v-' + v).hidden = (v !== name); });
+  resetEyes();
 }
 function setMsg(id, text, kind) {
   const el = $(id);
@@ -310,6 +314,7 @@ function hideDelBox() {
   $('delBox').hidden = true;
   $('d-pw').value = '';
   $('delBtn').hidden = false;
+  resetEyes();
 }
 function switchTo(id) {
   S.cur = id;
@@ -340,6 +345,7 @@ function hidePinBox() {
   $('pinBox').hidden = true;
   $('p-pw').value = '';
   $('pinBtn').hidden = false;
+  resetEyes();
 }
 function askPin() {
   hideDelBox();
@@ -372,6 +378,7 @@ function hideAddBox() {
   $('addBox').hidden = true;
   $('a-pw').value = '';
   $('addBtn').hidden = false;
+  resetEyes();
 }
 function askAdd() {
   $('addBtn').hidden = true;
@@ -685,7 +692,35 @@ $('r-btn').addEventListener('click', () => {
   init();
 });
 
+/* ---------- nút hiện/ẩn mật khẩu ---------- */
+function initEyes() {
+  document.querySelectorAll('input[type="password"]').forEach(inp => {
+    const wrap = document.createElement('div');
+    wrap.className = 'pw';
+    inp.parentNode.insertBefore(wrap, inp);
+    wrap.appendChild(inp);
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'eye';
+    b.textContent = 'Hiện';
+    b.addEventListener('click', () => {
+      const reveal = (inp.type === 'password');
+      inp.type = reveal ? 'text' : 'password';
+      b.textContent = reveal ? 'Ẩn' : 'Hiện';
+      inp.focus();
+    });
+    wrap.appendChild(b);
+  });
+}
+function resetEyes() {
+  document.querySelectorAll('.pw').forEach(w => {
+    w.querySelector('input').type = 'password';
+    w.querySelector('.eye').textContent = 'Hiện';
+  });
+}
+
 /* ---------- khởi động ---------- */
+initEyes();
 Object.assign(S, detectRepo());
 init();
 })();
