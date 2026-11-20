@@ -134,8 +134,17 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
     <p id="e-msg" class="msg"></p>
     <details>
       <summary>Đổi mật khẩu / token</summary>
+      <label>Mật khẩu hiện tại (bắt buộc)
+        <input id="o-pw1" type="password" autocomplete="off">
+      </label>
+      <label>Nhập lại mật khẩu hiện tại
+        <input id="o-pw2" type="password" autocomplete="off">
+      </label>
       <label>Mật khẩu mới (để trống nếu không đổi)
         <input id="n-pw" type="password" autocomplete="new-password">
+      </label>
+      <label>Nhập lại mật khẩu mới
+        <input id="n-pw2" type="password" autocomplete="new-password">
       </label>
       <label>Token mới (để trống nếu không đổi)
         <input id="n-token" type="password" autocomplete="off">
@@ -558,21 +567,30 @@ async function save() {
 async function applySettings() {
   const np = $('n-pw').value;
   const nt = $('n-token').value.trim();
+  const o1 = $('o-pw1').value;
+  const o2 = $('o-pw2').value;
   if (!np && !nt) return setMsg('e-msg', 'Chưa nhập gì để đổi.', 'err');
+  if (!o1 || !o2) return setMsg('e-msg', 'Hãy nhập mật khẩu hiện tại 2 lần để xác nhận.', 'err');
+  if (o1 !== o2) return setMsg('e-msg', 'Hai lần nhập mật khẩu hiện tại không khớp.', 'err');
   if (np && np.length < 12) return setMsg('e-msg', 'Mật khẩu mới cần ít nhất 12 ký tự.', 'err');
+  if (np && np !== $('n-pw2').value) return setMsg('e-msg', 'Hai lần nhập mật khẩu mới không khớp.', 'err');
   if (saving) return setMsg('e-msg', 'Đang lưu, hãy thử lại sau vài giây.', 'err');
   saving = true;
   busy($('applyBtn'), true);
   setMsg('e-msg', 'Đang xử lý…');
   try {
-    const next = { key: S.key, salt: S.salt, iter: S.iter, token: nt || S.token };
+    if (!(await verifyPassword(o1))) throw new Error('Mật khẩu hiện tại không đúng.');
+    const next ={ key: S.key, salt: S.salt, iter: S.iter, token: nt || S.token };
     if (np) {
       next.salt = crypto.getRandomValues(new Uint8Array(16));
       next.iter = ITER;
       next.key = await deriveKey(np, next.salt, next.iter);
     }
     await persist(next, 'Đã cập nhật và lưu.');
+    $('o-pw1').value = '';
+    $('o-pw2').value = '';
     $('n-pw').value = '';
+    $('n-pw2').value = '';
     $('n-token').value = '';
   } catch (e) {
     setMsg('e-msg', e.message, 'err');
@@ -591,6 +609,9 @@ function lock() {
   hideDelBox();
   hidePinBox();
   hideAddBox();
+  $('o-pw1').value = '';
+  $('o-pw2').value = '';
+  $('n-pw2').value = '';
   $('n-pw').value = '';
   $('n-token').value = '';
   init();
