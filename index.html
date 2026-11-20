@@ -121,6 +121,13 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
           <button id="delOk" type="button" class="ghost danger">Xác nhận xóa</button>
           <button id="delCancel" type="button" class="ghost">Hủy</button>
         </div>
+        <div id="pinBox" hidden>
+          <label>Nhập mật khẩu để <span id="p-action"></span> mục "<span id="p-name"></span>"
+            <input id="p-pw" type="password" autocomplete="off">
+          </label>
+          <button id="pinOk" type="button" class="ghost">Xác nhận</button>
+          <button id="pinCancel" type="button" class="ghost">Hủy</button>
+        </div>
       </div>
     </div>
 
@@ -301,6 +308,7 @@ function switchTo(id) {
   $('title').value = n.title;
   $('text').value = n.text;
   hideDelBox();
+  hidePinBox();
   renderList();
 }
 function addNote() {
@@ -318,6 +326,38 @@ function togglePin() {
   renderList();
   refreshDirty();
   save();
+}
+function hidePinBox() {
+  $('pinBox').hidden = true;
+  $('p-pw').value = '';
+  $('pinBtn').hidden = false;
+}
+function askPin() {
+  hideDelBox();
+  const n = curNote();
+  $('p-action').textContent = n.pinned ? 'bỏ ghim' : 'ghim';
+  $('p-name').textContent = n.title.trim() || '(không tên)';
+  $('pinBtn').hidden = true;
+  $('pinBox').hidden = false;
+  $('p-pw').focus();
+}
+async function confirmPin() {
+  const pw = $('p-pw').value;
+  if (!pw) return setMsg('e-msg', 'Hãy nhập mật khẩu để ghim hoặc bỏ ghim.', 'err');
+  busy($('pinOk'), true);
+  setMsg('e-msg', 'Đang kiểm tra mật khẩu…');
+  try {
+    if (!(await verifyPassword(pw))) {
+      setMsg('e-msg', 'Sai mật khẩu, chưa thay đổi gì.', 'err');
+      $('p-pw').select();
+      return;
+    }
+    hidePinBox();
+    setMsg('e-msg', '');
+    togglePin();
+  } finally {
+    busy($('pinOk'), false);
+  }
 }
 function hideAddBox() {
   $('addBox').hidden = true;
@@ -358,6 +398,7 @@ async function verifyPassword(pw) {
   }
 }
 function askDelete() {
+  hidePinBox();
   $('d-name').textContent = curNote().title.trim() || '(không tên)';
   $('delBtn').hidden = true;
   $('delBox').hidden = false;
@@ -548,6 +589,7 @@ function lock() {
   $('title').value = '';
   $('noteList').textContent = '';
   hideDelBox();
+  hidePinBox();
   hideAddBox();
   $('n-pw').value = '';
   $('n-token').value = '';
@@ -580,7 +622,13 @@ $('a-pw').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); confirmAdd(); }
   else if (e.key === 'Escape') hideAddBox();
 });
-$('pinBtn').addEventListener('click', togglePin);
+$('pinBtn').addEventListener('click', askPin);
+$('pinOk').addEventListener('click', confirmPin);
+$('pinCancel').addEventListener('click', hidePinBox);
+$('p-pw').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmPin(); }
+  else if (e.key === 'Escape') hidePinBox();
+});
 $('delBtn').addEventListener('click', askDelete);
 $('delOk').addEventListener('click', confirmDelete);
 $('delCancel').addEventListener('click', hideDelBox);
