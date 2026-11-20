@@ -6,21 +6,22 @@
 <meta name="robots" content="noindex,nofollow">
 <title>Ghi chú</title>
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--text:#1c1e21;--muted:#6b7280;--accent:#2563eb;--border:#d7dbe0;--err:#c62828;--ok:#2e7d32}
-@media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1c1f24;--text:#e6e8eb;--muted:#9aa3ad;--accent:#4c8dff;--border:#333a42;--err:#ff6b6b;--ok:#66bb6a}}
+:root{--bg:#f5f6f8;--card:#fff;--text:#1c1e21;--muted:#6b7280;--accent:#2563eb;--border:#d7dbe0;--err:#c62828;--ok:#2e7d32;--sel:#e8effd}
+@media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1c1f24;--text:#e6e8eb;--muted:#9aa3ad;--accent:#4c8dff;--border:#333a42;--err:#ff6b6b;--ok:#66bb6a;--sel:#26324a}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-.wrap{max-width:820px;margin:0 auto;padding:16px}
+.wrap{max-width:980px;margin:0 auto;padding:16px}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-top:16px}
 .narrow{max-width:440px;margin:8vh auto 0}
 h1{font-size:1.25rem;margin:0 0 12px}
 label{display:block;margin:12px 0 0;font-size:.9rem;color:var(--muted)}
 input,textarea{width:100%;margin-top:4px;padding:10px 12px;font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:8px}
 input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:0}
-textarea{min-height:60vh;resize:vertical;line-height:1.6}
+textarea{min-height:55vh;resize:vertical;line-height:1.6}
 button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:10px 16px;margin-top:16px;color:#fff;background:var(--accent)}
 button.ghost{background:transparent;color:var(--accent);border:1px solid var(--border)}
+button.danger{color:var(--err)}
 button:disabled{opacity:.6;cursor:wait}
 .bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .bar button{margin-top:0}
@@ -31,10 +32,20 @@ button:disabled{opacity:.6;cursor:wait}
 .msg.ok{color:var(--ok)}
 details{margin-top:14px}
 summary{cursor:pointer;color:var(--muted);font-size:.9rem}
-.repo{margin:20px auto 0;max-width:820px}
+.repo{margin:20px auto 0;max-width:980px}
 .row{display:flex;gap:8px;flex-wrap:wrap}
 .row input{flex:1;min-width:140px}
 .row button{margin-top:4px}
+.layout{display:grid;grid-template-columns:210px 1fr;gap:16px;margin-top:12px}
+.notelist{display:flex;flex-direction:column;gap:4px}
+.notelist button{margin:0;text-align:left;color:var(--text);background:transparent;border:1px solid transparent;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%}
+.notelist button.active{background:var(--sel);border-color:var(--accent)}
+.block{width:100%}
+@media (max-width:640px){
+  .layout{grid-template-columns:1fr}
+  .notelist{flex-direction:row;overflow-x:auto;padding-bottom:4px}
+  .notelist button{width:auto;flex:0 0 auto;max-width:60vw}
+}
 </style>
 </head>
 <body>
@@ -81,9 +92,23 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
       <button id="saveBtn" type="button">Lưu</button>
       <button id="lockBtn" type="button" class="ghost">Khóa</button>
     </div>
-    <label style="margin-top:12px">Nội dung
-      <textarea id="text" spellcheck="false"></textarea>
-    </label>
+
+    <div class="layout">
+      <aside>
+        <div id="noteList" class="notelist"></div>
+        <button id="addBtn" type="button" class="ghost block">+ Thêm mục</button>
+      </aside>
+      <div>
+        <label style="margin-top:0">Tên mục
+          <input id="title" autocomplete="off" maxlength="80">
+        </label>
+        <label>Nội dung
+          <textarea id="text" spellcheck="false"></textarea>
+        </label>
+        <button id="delBtn" type="button" class="ghost danger">Xóa mục này</button>
+      </div>
+    </div>
+
     <p id="e-msg" class="msg"></p>
     <details>
       <summary>Đổi mật khẩu / token</summary>
@@ -121,7 +146,7 @@ const dec = new TextDecoder();
 const $ = id => document.getElementById(id);
 
 const S = { owner: '', repo: '', sha: null, file: null, key: null, salt: null,
-            iter: ITER, token: null, dirty: false, saved: '' };
+            iter: ITER, token: null, notes: [], cur: null, dirty: false, saved: '' };
 
 /* ---------- tiện ích ---------- */
 function show(name) {
@@ -145,6 +170,10 @@ function fromB64(s) {
   return u;
 }
 function busy(btn, on) { btn.disabled = on; }
+function newId() {
+  const b = crypto.getRandomValues(new Uint8Array(8));
+  return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+}
 
 /* ---------- mã hóa (AES-GCM + PBKDF2) ---------- */
 async function deriveKey(pw, salt, iter) {
@@ -207,6 +236,65 @@ function detectRepo() {
   return { owner: '', repo: '' };
 }
 
+/* ---------- dữ liệu nhiều mục ---------- */
+function normalize(data) {
+  let notes = [];
+  if (data && Array.isArray(data.notes)) {
+    notes = data.notes.map(n => ({
+      id: String(n.id || newId()),
+      title: String(n.title || ''),
+      text: String(n.text || '')
+    }));
+  } else if (data && typeof data.text === 'string') {
+    // định dạng cũ (một khối văn bản duy nhất)
+    notes = [{ id: newId(), title: 'Ghi chú 1', text: data.text }];
+  }
+  if (!notes.length) notes = [{ id: newId(), title: 'Ghi chú 1', text: '' }];
+  return notes;
+}
+function curNote() { return S.notes.find(n => n.id === S.cur) || S.notes[0]; }
+function refreshDirty() {
+  S.dirty = (JSON.stringify(S.notes) !== S.saved);
+  $('status').textContent = S.dirty ? 'Chưa lưu thay đổi' : 'Đã lưu';
+}
+function renderList() {
+  const box = $('noteList');
+  box.textContent = '';
+  S.notes.forEach(n => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = n.title.trim() || '(không tên)';
+    b.title = b.textContent;
+    if (n.id === S.cur) b.className = 'active';
+    b.addEventListener('click', () => switchTo(n.id));
+    box.appendChild(b);
+  });
+}
+function switchTo(id) {
+  S.cur = id;
+  const n = curNote();
+  $('title').value = n.title;
+  $('text').value = n.text;
+  renderList();
+}
+function addNote() {
+  const n = { id: newId(), title: 'Ghi chú ' + (S.notes.length + 1), text: '' };
+  S.notes.push(n);
+  switchTo(n.id);
+  refreshDirty();
+  $('title').focus();
+  $('title').select();
+}
+function deleteNote() {
+  const n = curNote();
+  if (!confirm(`Xóa mục "${n.title.trim() || '(không tên)'}"? Việc xóa có hiệu lực sau khi bạn bấm Lưu.`)) return;
+  const i = S.notes.indexOf(n);
+  S.notes.splice(i, 1);
+  if (!S.notes.length) S.notes.push({ id: newId(), title: 'Ghi chú 1', text: '' });
+  switchTo(S.notes[Math.min(i, S.notes.length - 1)].id);
+  refreshDirty();
+}
+
 /* ---------- luồng chính ---------- */
 async function init() {
   show('loading');
@@ -247,13 +335,14 @@ async function doSetup(ev) {
   busy($('s-btn'), true);
   setMsg('s-msg', 'Đang mã hóa và lưu…');
   try {
+    const notes = normalize(null);
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const key = await deriveKey(pw, salt, ITER);
-    const file = await makeFile(key, salt, ITER, { text: '', token });
+    const file = await makeFile(key, salt, ITER, { notes, token });
     const sha = await putFile(token, file, null);
     S.key = key; S.salt = salt; S.iter = ITER; S.token = token; S.sha = sha;
     $('s-token').value = ''; $('s-pw').value = ''; $('s-pw2').value = '';
-    openEditor('');
+    openEditor(notes);
   } catch (e) {
     setMsg('s-msg', e.message, 'err');
   } finally {
@@ -280,7 +369,7 @@ async function doUnlock(ev) {
     const data = JSON.parse(dec.decode(plain));
     S.key = key; S.salt = salt; S.iter = iter; S.token = data.token;
     $('u-pw').value = '';
-    openEditor(data.text || '');
+    openEditor(normalize(data));
   } catch (e) {
     setMsg('u-msg', e.message, 'err');
     $('u-pw').select();
@@ -289,32 +378,27 @@ async function doUnlock(ev) {
   }
 }
 
-function openEditor(text) {
-  $('text').value = text;
-  S.saved = text;
-  S.dirty = false;
+function openEditor(notes) {
+  S.notes = notes;
+  S.cur = notes[0].id;
+  S.saved = JSON.stringify(S.notes);
   setMsg('u-msg', '');
   setMsg('s-msg', '');
   setMsg('e-msg', '');
-  updateStatus();
+  switchTo(S.cur);
+  refreshDirty();
   show('editor');
   resetIdle();
   $('text').focus();
 }
 
-function updateStatus() {
-  $('status').textContent = S.dirty ? 'Chưa lưu thay đổi' : 'Đã lưu';
-}
-
 async function persist(next, okText) {
-  const payload = { text: $('text').value, token: next.token };
-  const file = await makeFile(next.key, next.salt, next.iter, payload);
+  const file = await makeFile(next.key, next.salt, next.iter, { notes: S.notes, token: next.token });
   const sha = await putFile(next.token, file, S.sha);
   S.sha = sha;
   S.key = next.key; S.salt = next.salt; S.iter = next.iter; S.token = next.token;
-  S.saved = payload.text;
-  S.dirty = ($('text').value !== S.saved);
-  updateStatus();
+  S.saved = JSON.stringify(S.notes);
+  refreshDirty();
   setMsg('e-msg', okText || 'Đã lưu lên GitHub.', 'ok');
 }
 
@@ -356,8 +440,10 @@ async function applySettings() {
 
 function lock() {
   S.key = null; S.token = null; S.salt = null; S.file = null; S.sha = null;
-  S.dirty = false; S.saved = '';
+  S.notes = []; S.cur = null; S.dirty = false; S.saved = '';
   $('text').value = '';
+  $('title').value = '';
+  $('noteList').textContent = '';
   $('n-pw').value = '';
   $('n-token').value = '';
   init();
@@ -382,9 +468,16 @@ $('lockBtn').addEventListener('click', () => {
   lock();
 });
 $('applyBtn').addEventListener('click', applySettings);
+$('addBtn').addEventListener('click', addNote);
+$('delBtn').addEventListener('click', deleteNote);
 $('text').addEventListener('input', () => {
-  S.dirty = ($('text').value !== S.saved);
-  updateStatus();
+  curNote().text = $('text').value;
+  refreshDirty();
+});
+$('title').addEventListener('input', () => {
+  curNote().title = $('title').value;
+  renderList();
+  refreshDirty();
 });
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && !$('v-editor').hidden) {
