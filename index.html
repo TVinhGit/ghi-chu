@@ -6,7 +6,7 @@
 <meta name="robots" content="noindex,nofollow">
 <title>Ghi chú</title>
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--text:#1c1e21;--muted:#6b7280;--accent:#2563eb;--btn:#2563eb;--border:#d7dbe0;--err:#c62828;--ok:#2e7d32;--sel:#e8effd}
+:root{color-scheme:light dark;--bg:#f5f6f8;--card:#fff;--text:#1c1e21;--muted:#6b7280;--accent:#2563eb;--btn:#2563eb;--border:#d7dbe0;--err:#c62828;--ok:#2e7d32;--sel:#e8effd}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1c1f24;--text:#e6e8eb;--muted:#9aa3ad;--accent:#4c8dff;--btn:#2f6fe0;--border:#333a42;--err:#ff6b6b;--ok:#66bb6a;--sel:#26324a}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -66,7 +66,7 @@ input[readonly],textarea[readonly]{background:var(--sel)}
   .bar .spacer{flex:1 1 0;min-width:0}
   textarea{min-height:45vh;min-height:45dvh}
   .actions button{flex:1 1 calc(50% - 8px)}
-  #delBox button,#pinBox button,#addBox button,#lockBox button{width:calc(50% - 8px)}
+  #delBox>button,#pinBox>button,#addBox>button,#lockBox>button{width:calc(50% - 8px)}
 }
 .pw{position:relative;display:block;margin-top:4px}
 .pw input{margin-top:0;padding-right:44px}
@@ -126,7 +126,7 @@ input[readonly],textarea[readonly]{background:var(--sel)}
 
     <div class="layout">
       <aside>
-        <input id="q" type="search" placeholder="Tìm ghi chú…" autocomplete="off" enterkeyhint="search" aria-label="Tìm ghi chú">
+        <input id="q" type="search" placeholder="Tìm ghi chú…" autocomplete="off" spellcheck="false" enterkeyhint="search" aria-label="Tìm ghi chú">
         <p id="qInfo" class="muted hint" style="margin:0 0 6px" hidden></p>
         <div id="noteList" class="notelist"></div>
         <button id="addBtn" type="button" class="ghost block">+ Thêm mục</button>
@@ -142,7 +142,7 @@ input[readonly],textarea[readonly]{background:var(--sel)}
       <div>
         <p id="lockInfo" class="muted lockinfo" hidden>🔒 Mục này đang khóa: chỉ xem, không sửa hoặc xóa được. Bấm “Mở khóa mục” và nhập mật khẩu để chỉnh sửa.</p>
         <label style="margin-top:0">Tên mục
-          <input id="title" autocomplete="off" maxlength="80">
+          <input id="title" autocomplete="off" spellcheck="false" maxlength="80">
         </label>
         <label>Nội dung
           <textarea id="text" spellcheck="false"></textarea>
@@ -417,9 +417,17 @@ function jumpToMatch() {
   if (at < 0) return;
   const start = map[at];
   const end = map[at + len];
+  /* đo chiều cao nội dung tới vị trí khớp: phải bỏ min-height/height tạm thời,
+     nếu không scrollHeight luôn >= chiều cao ô và các kết quả ở màn hình đầu bị cuộn lệch */
+  const st = ta.style;
+  const prevH = st.height, prevMin = st.minHeight;
+  st.minHeight = '0';
+  st.height = '0';
   ta.value = full.slice(0, start);
   const h = ta.scrollHeight;
   ta.value = full;
+  st.height = prevH;
+  st.minHeight = prevMin;
   if (window.matchMedia('(pointer:fine)').matches) {
     ta.focus({ preventScroll: true });
     ta.setSelectionRange(start, end);
@@ -585,6 +593,7 @@ function applyLock() {
 function hideLockBox() {
   $('lockBox').hidden = true;
   $('l-pw').value = '';
+  resetEyes($('lockBox'));
   $('lockNoteBtn').hidden = false;
 }
 function askLock() {
@@ -626,6 +635,7 @@ async function confirmLock() {
 function hideDelBox() {
   $('delBox').hidden = true;
   $('d-pw').value = '';
+  resetEyes($('delBox'));
   $('delBtn').hidden = false;
 }
 function switchTo(id) {
@@ -648,8 +658,9 @@ function addNote() {
   $('title').select();
   save();
 }
-function togglePin() {
-  const n = curNote();
+function togglePin(id) {
+  const n = S.notes.find(x => x.id === id);
+  if (!n) return;
   n.pinned = !n.pinned;
   renderList();
   refreshDirty();
@@ -658,6 +669,7 @@ function togglePin() {
 function hidePinBox() {
   $('pinBox').hidden = true;
   $('p-pw').value = '';
+  resetEyes($('pinBox'));
   $('pinBtn').hidden = false;
 }
 function askPin() {
@@ -672,6 +684,7 @@ function askPin() {
 }
 async function confirmPin() {
   if ($('pinOk').disabled) return;
+  const id = curNote().id;   // chốt mục đang xác nhận: người dùng có thể chuyển mục trong lúc kiểm tra mật khẩu
   const pw = $('p-pw').value;
   if (!pw) return setMsg('e-msg', 'Hãy nhập mật khẩu để ghim hoặc bỏ ghim.', 'err');
   busy($('pinOk'), true);
@@ -684,7 +697,7 @@ async function confirmPin() {
     }
     hidePinBox();
     setMsg('e-msg', '');
-    togglePin();
+    togglePin(id);
   } finally {
     busy($('pinOk'), false);
   }
@@ -692,6 +705,7 @@ async function confirmPin() {
 function hideAddBox() {
   $('addBox').hidden = true;
   $('a-pw').value = '';
+  resetEyes($('addBox'));
   $('addBtn').hidden = false;
 }
 function askAdd() {
@@ -753,10 +767,15 @@ async function confirmDelete() {
     }
     if (S.notes.indexOf(n) < 0) return;
     const pos = sortedNotes().indexOf(n);
+    const wasCur = (S.cur === n.id);
     S.notes.splice(S.notes.indexOf(n), 1);
     if (!S.notes.length) S.notes.push({ id: newId(), title: 'Ghi chú 1', text: '', pinned: false });
-    const after = sortedNotes();
-    switchTo(after[Math.min(pos, after.length - 1)].id);
+    if (wasCur || !S.notes.some(x => x.id === S.cur)) {
+      const after = sortedNotes();
+      switchTo(after[Math.min(pos, after.length - 1)].id);
+    } else {
+      renderList();   // người dùng đã chuyển sang mục khác trong lúc xác nhận: không kéo họ đi chỗ khác
+    }
     refreshDirty();
     setMsg('e-msg', 'Đã xóa mục. Bấm Lưu để cập nhật lên GitHub (cũng tự lưu khi bạn khóa hoặc rời trang).', 'ok');
   } finally {
@@ -978,7 +997,7 @@ async function save() {
   } finally {
     saving = false;
     busy($('saveBtn'), false);
-    if (saveAgain) { saveAgain = false; save(); }
+    if (saveAgain) { saveAgain = false; if (S.dirty) save(); }   // chỉ lưu nối tiếp khi thật sự còn thay đổi (tránh commit trùng)
   }
 }
 
@@ -1015,7 +1034,7 @@ async function applySettings() {
   } finally {
     saving = false;
     busy($('applyBtn'), false);
-    if (saveAgain) { saveAgain = false; save(); }   // lần lưu bị hoãn trong lúc đổi mật khẩu/token
+    if (saveAgain) { saveAgain = false; if (S.dirty) save(); }   // lần lưu bị hoãn trong lúc đổi mật khẩu/token
   }
 }
 
@@ -1180,9 +1199,10 @@ function setupEyes() {
     wrap.appendChild(b);
   });
 }
-function resetEyes() {
-  document.querySelectorAll('.pw').forEach(w => {
+function resetEyes(root) {
+  (root || document).querySelectorAll('.pw').forEach(w => {
     const inp = w.querySelector('input'), b = w.querySelector('.eye');
+    if (!inp || !b) return;
     inp.type = 'password';
     b.setAttribute('aria-pressed', 'false');
     b.setAttribute('aria-label', 'Hiện mật khẩu');
