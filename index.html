@@ -47,6 +47,11 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
 #q{margin:0 0 8px;-webkit-appearance:none;appearance:none}
 .hint{margin:6px 0 0;font-size:.8rem}
 .block{width:100%}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.actions button{margin-top:0}
+#delBtn:disabled{cursor:not-allowed}
+.lockinfo{margin:0 0 10px;padding:8px 12px;border:1px solid var(--accent);border-radius:8px;background:var(--sel)}
+input[readonly],textarea[readonly]{background:var(--sel)}
 @media (max-width:640px){
   .wrap{padding:10px}
   .card{padding:14px;margin-top:10px;border-radius:10px}
@@ -60,8 +65,8 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
   .bar button{flex:0 0 auto}
   .bar .spacer{flex:1 1 0;min-width:0}
   textarea{min-height:45vh;min-height:45dvh}
-  #pinBtn,#delBtn,#delBox button,#pinBox button,#addBox button{width:calc(50% - 8px)}
-  #pinBtn{margin-right:8px!important}
+  .actions button{flex:1 1 calc(50% - 8px)}
+  #delBox button,#pinBox button,#addBox button,#lockBox button{width:calc(50% - 8px)}
 }
 .pw{position:relative;display:block;margin-top:4px}
 .pw input{margin-top:0;padding-right:44px}
@@ -135,14 +140,18 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
         <p id="dragHint" class="muted hint">Giữ một mục rồi kéo để đổi vị trí.</p>
       </aside>
       <div>
+        <p id="lockInfo" class="muted lockinfo" hidden>🔒 Mục này đang khóa: chỉ xem, không sửa hoặc xóa được. Bấm “Mở khóa mục” và nhập mật khẩu để chỉnh sửa.</p>
         <label style="margin-top:0">Tên mục
           <input id="title" autocomplete="off" maxlength="80">
         </label>
         <label>Nội dung
           <textarea id="text" spellcheck="false"></textarea>
         </label>
-        <button id="pinBtn" type="button" class="ghost" style="margin-right:8px">Ghim mục này</button>
-        <button id="delBtn" type="button" class="ghost danger">Xóa mục này</button>
+        <div class="actions">
+          <button id="pinBtn" type="button" class="ghost">Ghim mục này</button>
+          <button id="lockNoteBtn" type="button" class="ghost">🔒 Khóa mục này</button>
+          <button id="delBtn" type="button" class="ghost danger">Xóa mục này</button>
+        </div>
         <div id="delBox" hidden>
           <label>Nhập mật khẩu để xóa mục "<span id="d-name"></span>"
             <input id="d-pw" type="password" autocomplete="off">
@@ -156,6 +165,13 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
           </label>
           <button id="pinOk" type="button" class="ghost">Xác nhận</button>
           <button id="pinCancel" type="button" class="ghost">Hủy</button>
+        </div>
+        <div id="lockBox" hidden>
+          <label>Nhập mật khẩu để <span id="l-action"></span> mục "<span id="l-name"></span>"
+            <input id="l-pw" type="password" autocomplete="off">
+          </label>
+          <button id="lockOk" type="button" class="ghost">Xác nhận</button>
+          <button id="lockCancel" type="button" class="ghost">Hủy</button>
         </div>
       </div>
     </div>
@@ -317,7 +333,8 @@ function normalize(data) {
       id: String(n.id || newId()),
       title: String(n.title || ''),
       text: String(n.text || ''),
-      pinned: !!n.pinned
+      pinned: !!n.pinned,
+      locked: !!n.locked
     }));
   } else if (data && typeof data.text === 'string') {
     // định dạng cũ (một khối văn bản duy nhất)
@@ -341,7 +358,7 @@ function markDirtySoon() {
   dirtyTimer = setTimeout(refreshDirty, 400);
 }
 function labelOf(n) {
-  return (n.pinned ? '📌 ' : '') + (n.title.trim() || '(không tên)');
+  return (n.pinned ? '📌 ' : '') + (n.locked ? '🔒 ' : '') + (n.title.trim() || '(không tên)');
 }
 /* ---------- rev: phát hiện file bị đặt lại bản cũ ---------- */
 function seenKey() { return 'ghichu-rev:' + S.owner + '/' + S.repo; }
@@ -554,6 +571,57 @@ function renderList() {
   $('qInfo').textContent = searching ? list.length + '/' + S.notes.length + ' mục khớp' : '';
   $('dragHint').hidden = searching;
   $('pinBtn').textContent = curNote().pinned ? 'Bỏ ghim' : 'Ghim mục này';
+  applyLock();
+}
+/* ---------- khóa từng mục: khóa/mở khóa đều phải nhập mật khẩu; mục khóa chỉ xem ---------- */
+function applyLock() {
+  const lk = !!curNote().locked;
+  $('title').readOnly = lk;
+  $('text').readOnly = lk;
+  $('delBtn').disabled = lk;
+  $('lockInfo').hidden = !lk;
+  $('lockNoteBtn').textContent = lk ? '🔓 Mở khóa mục' : '🔒 Khóa mục này';
+}
+function hideLockBox() {
+  $('lockBox').hidden = true;
+  $('l-pw').value = '';
+  $('lockNoteBtn').hidden = false;
+}
+function askLock() {
+  hideDelBox();
+  hidePinBox();
+  const n = curNote();
+  $('l-action').textContent = n.locked ? 'mở khóa' : 'khóa';
+  $('l-name').textContent = n.title.trim() || '(không tên)';
+  $('lockNoteBtn').hidden = true;
+  $('lockBox').hidden = false;
+  $('l-pw').focus();
+}
+async function confirmLock() {
+  if ($('lockOk').disabled) return;
+  const id = curNote().id;
+  const act = curNote().locked ? 'mở khóa' : 'khóa';
+  const pw = $('l-pw').value;
+  if (!pw) return setMsg('e-msg', 'Hãy nhập mật khẩu để ' + act + ' mục.', 'err');
+  busy($('lockOk'), true);
+  setMsg('e-msg', 'Đang kiểm tra mật khẩu…');
+  try {
+    if (!(await verifyPassword(pw))) {
+      setMsg('e-msg', 'Sai mật khẩu, chưa ' + act + ' mục nào.', 'err');
+      $('l-pw').select();
+      return;
+    }
+    const n = S.notes.find(x => x.id === id);
+    if (!n) { setMsg('e-msg', ''); return; }
+    hideLockBox();
+    setMsg('e-msg', '');
+    n.locked = !n.locked;
+    renderList();
+    refreshDirty();
+    save();
+  } finally {
+    busy($('lockOk'), false);
+  }
 }
 function hideDelBox() {
   $('delBox').hidden = true;
@@ -567,10 +635,11 @@ function switchTo(id) {
   $('text').value = n.text;
   hideDelBox();
   hidePinBox();
+  hideLockBox();
   renderList();
 }
 function addNote() {
-  const n = { id: newId(), title: 'Ghi chú ' + (S.notes.length + 1), text: '', pinned: false };
+  const n = { id: newId(), title: 'Ghi chú ' + (S.notes.length + 1), text: '', pinned: false, locked: false };
   S.notes.push(n);
   clearSearch();
   switchTo(n.id);
@@ -593,6 +662,7 @@ function hidePinBox() {
 }
 function askPin() {
   hideDelBox();
+  hideLockBox();
   const n = curNote();
   $('p-action').textContent = n.pinned ? 'bỏ ghim' : 'ghim';
   $('p-name').textContent = n.title.trim() || '(không tên)';
@@ -659,7 +729,9 @@ async function verifyPassword(pw) {
   }
 }
 function askDelete() {
+  if (curNote().locked) return setMsg('e-msg', 'Mục đang khóa. Hãy mở khóa trước khi xóa.', 'err');
   hidePinBox();
+  hideLockBox();
   $('d-name').textContent = curNote().title.trim() || '(không tên)';
   $('delBtn').hidden = true;
   $('delBox').hidden = false;
@@ -670,6 +742,7 @@ async function confirmDelete() {
   const pw = $('d-pw').value;
   if (!pw) return setMsg('e-msg', 'Hãy nhập mật khẩu để xóa.', 'err');
   const n = curNote();
+  if (n.locked) return setMsg('e-msg', 'Mục đang khóa. Hãy mở khóa trước khi xóa.', 'err');
   busy($('delOk'), true);
   setMsg('e-msg', 'Đang kiểm tra mật khẩu…');
   try {
@@ -804,7 +877,7 @@ function openEditor(notes, stale) {
 
 /* gộp ba chiều theo id: base = bản đã lưu lần cuối, local = bản đang sửa, remote = bản mới trên GitHub */
 function mergeNotes(base, local, remote) {
-  const eq = (a, b) => a.title === b.title && a.text === b.text && a.pinned === b.pinned;
+  const eq = (a, b) => a.title === b.title && a.text === b.text && a.pinned === b.pinned && !!a.locked === !!b.locked;
   const B = new Map(base.map(n => [n.id, n]));
   const R = new Map(remote.map(n => [n.id, n]));
   const L = new Map(local.map(n => [n.id, n]));
@@ -959,6 +1032,7 @@ function lock() {
   hideDelBox();
   hidePinBox();
   hideAddBox();
+  hideLockBox();
   $('o-pw1').value = '';
   $('o-pw2').value = '';
   $('n-pw2').value = '';
@@ -1037,6 +1111,13 @@ $('p-pw').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); confirmPin(); }
   else if (e.key === 'Escape') hidePinBox();
 });
+$('lockNoteBtn').addEventListener('click', askLock);
+$('lockOk').addEventListener('click', confirmLock);
+$('lockCancel').addEventListener('click', hideLockBox);
+$('l-pw').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmLock(); }
+  else if (e.key === 'Escape') hideLockBox();
+});
 $('delBtn').addEventListener('click', askDelete);
 $('delOk').addEventListener('click', confirmDelete);
 $('delCancel').addEventListener('click', hideDelBox);
@@ -1045,11 +1126,14 @@ $('d-pw').addEventListener('keydown', e => {
   else if (e.key === 'Escape') hideDelBox();
 });
 $('text').addEventListener('input', () => {
-  curNote().text = $('text').value;
+  const n = curNote();
+  if (n.locked) { $('text').value = n.text; return; }
+  n.text = $('text').value;
   markDirtySoon();
 });
 $('title').addEventListener('input', () => {
   const n = curNote();
+  if (n.locked) { $('title').value = n.title; return; }
   n.title = $('title').value;
   // chỉ cập nhật nhãn của mục đang chọn, không dựng lại cả danh sách mỗi phím
   const b = Array.from($('noteList').children).find(el => el.dataset && el.dataset.id === n.id);
