@@ -78,6 +78,7 @@ summary{cursor:pointer;color:var(--muted);font-size:.9rem}
 
   <section id="v-loading" class="card narrow">
     <p id="loadMsg" class="msg">Đang tải…</p>
+    <button id="retryBtn" type="button" class="ghost" hidden>Thử lại</button>
   </section>
 
   <section id="v-setup" class="card narrow" hidden>
@@ -196,7 +197,9 @@ const dec = new TextDecoder();
 const $ = id => document.getElementById(id);
 
 const S = { owner: '', repo: '', sha: null, file: null, key: null, salt: null,
-            iter: ITER, token: null, notes: [], cur: null, dirty: false, saved: '', query: '' };
+            iter: ITER, token: null, notes: [], cur: null, dirty: false, saved: '', query: '', rev: 0 };
+/* bản mã hóa đã tải gần nhất (không bí mật) — dùng cho truy vấn có điều kiện, không tốn rate limit khi 304 */
+const cache = { etag: null, file: null, sha: null };
 
 /* ---------- tiện ích ---------- */
 function show(name) {
@@ -241,14 +244,38 @@ async function makeFile(key, salt, iter, payload) {
 /* ---------- GitHub API ---------- */
 function fileUrl() { return `${API}/repos/${S.owner}/${S.repo}/contents/${PATH}`; }
 
-async function fetchFile() {
-  const r = await fetch(fileUrl(), { headers: { Accept: 'application/vnd.github+json' }, cache: 'no-store' });
+function checkIter(n) {
+  n = n || ITER;
+  if (!Number.isInteger(n) || n < 100000 || n > 2000000) throw new Error('File dữ liệu không hợp lệ (số vòng lặp bất thường).');
+  return n;
+}
+
+/* useCache=true: gửi If-None-Match, nếu 304 thì dùng bản đã tải (không tính vào rate limit) */
+async function fetchFile(useCache) {
+  const headers = { Accept: 'application/vnd.github+json' };
+  if (useCache && cache.etag && cache.file) headers['If-None-Match'] = cache.etag;
+  const r = await fetch(fileUrl() + '?t=' + Date.now(), { headers, cache: 'no-store' });
+  if (r.status === 304 && cache.file) return { sha: cache.sha, file: cache.file };
   if (r.status === 404) return null;
   if (r.status === 403 || r.status === 429) throw new Error('GitHub tạm chặn truy cập (quá nhiều yêu cầu). Thử lại sau ít phút.');
   if (!r.ok) throw new Error('GitHub trả về lỗi ' + r.status + '.');
   const j = await r.json();
-  if (!j.content) throw new Error('Không đọc được file dữ liệu (có thể quá lớn).');
-  return { sha: j.sha, file: JSON.parse(atob(j.content.replace(/\s/g, ''))) };
+  let text;
+  if (j.content) {
+    text = atob(j.content.replace(/\s/g, ''));
+  } else {
+    // file > 1MB: API JSON không kèm nội dung, đọc bản raw (hỗ trợ tới 100MB)
+    const rr = await fetch(fileUrl() + '?t=' + Date.now(), {
+      headers: { Accept: 'application/vnd.github.raw+json' }, cache: 'no-store' });
+    if (rr.status === 403 || rr.status === 429) throw new Error('GitHub tạm chặn truy cập (quá nhiều yêu cầu). Thử lại sau ít phút.');
+    if (!rr.ok) throw new Error('Không đọc được file dữ liệu (lỗi ' + rr.status + ').');
+    text = await rr.text();
+  }
+  const file = JSON.parse(text);
+  cache.etag = r.headers.get('ETag');
+  cache.file = file;
+  cache.sha = j.sha;
+  return { sha: j.sha, file };
 }
 
 async function putFile(token, fileObj, sha) {
@@ -263,7 +290,9 @@ async function putFile(token, fileObj, sha) {
   if (r.status === 401) throw new Error('Token sai hoặc đã hết hạn.');
   if (r.status === 403 || r.status === 404) throw new Error('Token không ghi được vào repo này. Kiểm tra token có quyền Contents: Read and write và đúng repo.');
   if (r.status === 409 || r.status === 422) {
-    throw new Error('File trên GitHub đã thay đổi ở nơi khác. Hãy sao chép nội dung bạn vừa sửa, bấm Khóa rồi mở lại.');
+    const err = new Error('File trên GitHub đã thay đổi ở nơi khác và không tự gộp được. Hãy sao chép nội dung bạn vừa sửa, bấm Khóa rồi mở lại.');
+    err.code = 'CONFLICT';
+    throw err;
   }
   throw new Error('Lỗi khi lưu: ' + r.status);
 }
@@ -299,8 +328,28 @@ function normalize(data) {
 }
 function curNote() { return S.notes.find(n => n.id === S.cur) || S.notes[0]; }
 function refreshDirty() {
+  if (!S.key) return;
   S.dirty = (JSON.stringify(S.notes) !== S.saved);
   $('status').textContent = S.dirty ? 'Chưa lưu thay đổi' : 'Đã lưu';
+}
+/* khi gõ: đánh dấu ngay (rẻ), so sánh đầy đủ được dồn lại để không giật với ghi chú lớn */
+let dirtyTimer = null;
+function markDirtySoon() {
+  S.dirty = true;
+  $('status').textContent = 'Chưa lưu thay đổi';
+  clearTimeout(dirtyTimer);
+  dirtyTimer = setTimeout(refreshDirty, 400);
+}
+function labelOf(n) {
+  return (n.pinned ? '📌 ' : '') + (n.title.trim() || '(không tên)');
+}
+/* ---------- rev: phát hiện file bị đặt lại bản cũ ---------- */
+function seenKey() { return 'ghichu-rev:' + S.owner + '/' + S.repo; }
+function getSeen() {
+  try { return parseInt(localStorage.getItem(seenKey()), 10) || 0; } catch (e) { return 0; }
+}
+function setSeen(v) {
+  try { localStorage.setItem(seenKey(), String(v)); } catch (e) { /* bỏ qua */ }
 }
 function sortedNotes() {
   return S.notes.filter(n => n.pinned).concat(S.notes.filter(n => !n.pinned));
@@ -323,24 +372,40 @@ function clearSearch() {
   S.query = '';
   $('q').value = '';
 }
+/* fold từng ký tự và giữ bản đồ vị trí về chuỗi gốc (đúng cả khi văn bản ở dạng NFD) */
+function foldMap(s) {
+  let out = '';
+  const map = [];
+  let i = 0;
+  for (const ch of s) {
+    const f = ch.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+    for (let k = 0; k < f.length; k++) map.push(i);
+    out += f;
+    i += ch.length;
+  }
+  map.push(i);
+  return { f: out, map };
+}
 function jumpToMatch() {
   const tk = queryTokens();
   const ta = $('text');
   const full = ta.value;
-  const f = fold(full);
-  if (!tk.length || f.length !== full.length) return;
+  if (!tk.length) return;
+  const { f, map } = foldMap(full);
   let at = -1, len = 0;
   tk.forEach(t => {
     const i = f.indexOf(t);
     if (i >= 0 && (at < 0 || i < at)) { at = i; len = t.length; }
   });
   if (at < 0) return;
-  ta.value = full.slice(0, at);
+  const start = map[at];
+  const end = map[at + len];
+  ta.value = full.slice(0, start);
   const h = ta.scrollHeight;
   ta.value = full;
   if (window.matchMedia('(pointer:fine)').matches) {
     ta.focus({ preventScroll: true });
-    ta.setSelectionRange(at, at + len);
+    ta.setSelectionRange(start, end);
   }
   ta.scrollTop = Math.max(0, h - ta.clientHeight / 2);
 }
@@ -466,7 +531,7 @@ function renderList() {
   list.forEach(n => {
     const b = document.createElement('button');
     b.type = 'button';
-    b.textContent = (n.pinned ? '📌 ' : '') + (n.title.trim() || '(không tên)');
+    b.textContent = labelOf(n);
     b.title = b.textContent;
     b.dataset.id = n.id;
     b.dataset.pinned = n.pinned ? '1' : '0';
@@ -586,7 +651,7 @@ async function confirmAdd() {
 async function verifyPassword(pw) {
   try {
     const f = S.file;
-    const key = await deriveKey(pw, fromB64(f.salt), f.iter || ITER);
+    const key = await deriveKey(pw, fromB64(f.salt), checkIter(f.iter));
     await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(f.iv) }, key, fromB64(f.ct));
     return true;
   } catch (e) {
@@ -620,7 +685,7 @@ async function confirmDelete() {
     const after = sortedNotes();
     switchTo(after[Math.min(pos, after.length - 1)].id);
     refreshDirty();
-    setMsg('e-msg', 'Đã xóa mục. Bấm Lưu để cập nhật lên GitHub.', 'ok');
+    setMsg('e-msg', 'Đã xóa mục. Bấm Lưu để cập nhật lên GitHub (cũng tự lưu khi bạn khóa hoặc rời trang).', 'ok');
   } finally {
     busy($('delOk'), false);
   }
@@ -630,9 +695,16 @@ async function confirmDelete() {
 async function init() {
   show('loading');
   setMsg('loadMsg', 'Đang tải…');
+  $('retryBtn').hidden = true;
   try {
-    const r = await fetchFile();
+    const r = await fetchFile(true);
     if (!r) {
+      // 404 có thể do repo không tồn tại / private / đổi tên, không chỉ do chưa có data.json
+      const rr = await fetch(`${API}/repos/${S.owner}/${S.repo}`,
+        { headers: { Accept: 'application/vnd.github+json' }, cache: 'no-store' });
+      if (rr.status === 404) throw new Error(`Không tìm thấy repo ${S.owner}/${S.repo}. Repo cần ở chế độ public và đúng tên.`);
+      if (rr.status === 403 || rr.status === 429) throw new Error('GitHub tạm chặn truy cập (quá nhiều yêu cầu). Thử lại sau ít phút.');
+      if (!rr.ok) throw new Error('GitHub trả về lỗi ' + rr.status + '.');
       $('s-repo').textContent = `Repo: ${S.owner}/${S.repo}`;
       show('setup');
       $('s-token').focus();
@@ -643,7 +715,17 @@ async function init() {
     show('unlock');
     $('u-pw').focus();
   } catch (e) {
+    if (cache.file) {
+      // không tải được bản mới nhưng đã có bản mã hóa tải trước đó: vẫn cho mở
+      S.sha = cache.sha;
+      S.file = cache.file;
+      show('unlock');
+      setMsg('u-msg', 'Không tải được bản mới (' + e.message + ') — đang dùng bản đã tải trước đó.', 'err');
+      $('u-pw').focus();
+      return;
+    }
     setMsg('loadMsg', e.message, 'err');
+    $('retryBtn').hidden = false;
   }
 }
 
@@ -660,9 +742,12 @@ async function doSetup(ev) {
     const notes = normalize(null);
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const key = await deriveKey(pw, salt, ITER);
-    const file = await makeFile(key, salt, ITER, { notes, token });
+    const file = await makeFile(key, salt, ITER, { notes, token, rev: 1 });
     const sha = await putFile(token, file, null);
     S.key = key; S.salt = salt; S.iter = ITER; S.token = token; S.sha = sha; S.file = file;
+    S.rev = 1;
+    setSeen(1);   // thiết lập lại từ đầu: bỏ mốc rev cũ để không cảnh báo giả
+    cache.file = file; cache.sha = sha; cache.etag = null;
     $('s-token').value = ''; $('s-pw').value = ''; $('s-pw2').value = '';
     openEditor(notes);
   } catch (e) {
@@ -680,7 +765,7 @@ async function doUnlock(ev) {
   try {
     const f = S.file;
     const salt = fromB64(f.salt);
-    const iter = f.iter || ITER;
+    const iter = checkIter(f.iter);
     const key = await deriveKey(pw, salt, iter);
     let plain;
     try {
@@ -690,8 +775,10 @@ async function doUnlock(ev) {
     }
     const data = JSON.parse(dec.decode(plain));
     S.key = key; S.salt = salt; S.iter = iter; S.token = data.token;
+    S.rev = data.rev | 0;
+    const stale = S.rev < getSeen();
     $('u-pw').value = '';
-    openEditor(normalize(data));
+    openEditor(normalize(data), stale);
   } catch (e) {
     setMsg('u-msg', e.message, 'err');
     $('u-pw').select();
@@ -700,13 +787,14 @@ async function doUnlock(ev) {
   }
 }
 
-function openEditor(notes) {
+function openEditor(notes, stale) {
   S.notes = notes;
   S.cur = notes[0].id;
   S.saved = JSON.stringify(S.notes);
   setMsg('u-msg', '');
   setMsg('s-msg', '');
-  setMsg('e-msg', '');
+  setMsg('e-msg', stale ? 'Cảnh báo: dữ liệu trên GitHub cũ hơn bản bạn đã thấy trên thiết bị này. File có thể đã bị đặt lại về bản cũ — hãy kiểm tra trước khi lưu.' : '', stale ? 'err' : '');
+  setSeen(Math.max(getSeen(), S.rev));
   switchTo(S.cur);
   refreshDirty();
   show('editor');
@@ -714,18 +802,93 @@ function openEditor(notes) {
   $('text').focus();
 }
 
+/* gộp ba chiều theo id: base = bản đã lưu lần cuối, local = bản đang sửa, remote = bản mới trên GitHub */
+function mergeNotes(base, local, remote) {
+  const eq = (a, b) => a.title === b.title && a.text === b.text && a.pinned === b.pinned;
+  const B = new Map(base.map(n => [n.id, n]));
+  const R = new Map(remote.map(n => [n.id, n]));
+  const L = new Map(local.map(n => [n.id, n]));
+  const out = [];
+  local.forEach(l => {
+    const b = B.get(l.id), r = R.get(l.id);
+    if (r) {
+      if (eq(l, r)) out.push(l);
+      else if (b && eq(l, b)) out.push(r);          // chỉ nơi khác sửa
+      else if (!b || eq(r, b)) out.push(l);         // chỉ ở đây sửa
+      else {                                         // cả hai cùng sửa: giữ bản ở đây, giữ thêm bản kia để không mất dữ liệu
+        out.push(l);
+        out.push({ id: newId(), title: (r.title.trim() || '(không tên)') + ' (bản từ nơi khác)', text: r.text, pinned: false });
+      }
+    } else if (b) {
+      if (!eq(l, b)) out.push(l);                    // nơi khác đã xóa nhưng ở đây có sửa: giữ lại
+    } else {
+      out.push(l);                                   // mục mới tạo ở đây
+    }
+  });
+  remote.forEach(r => {
+    if (L.has(r.id)) return;
+    const b = B.get(r.id);
+    if (!b || !eq(r, b)) out.push(r);               // mục mới từ nơi khác, hoặc ở đây đã xóa nhưng nơi khác có sửa
+  });
+  if (!out.length) out.push({ id: newId(), title: 'Ghi chú 1', text: '', pinned: false });
+  return out;
+}
+
+/* tải bản mới nhất, gộp vào S.notes; ném lỗi nếu không giải mã được (vd. mật khẩu đã đổi ở nơi khác) */
+async function mergeRemote(sess) {
+  const r = await fetchFile(false);
+  if (!S.key || sess !== session) throw new Error('Đã khóa.');
+  if (!r) throw new Error('File dữ liệu trên GitHub không còn tồn tại.');
+  const f = r.file;
+  if (f.salt !== toB64(S.salt) || checkIter(f.iter) !== S.iter) {
+    throw new Error('Mật khẩu đã được đổi ở nơi khác. Hãy sao chép nội dung bạn vừa sửa, bấm Khóa rồi mở lại bằng mật khẩu mới.');
+  }
+  let data;
+  try {
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(f.iv) }, S.key, fromB64(f.ct));
+    data = JSON.parse(dec.decode(plain));
+  } catch (e) {
+    throw new Error('Không giải mã được bản mới trên GitHub.');
+  }
+  S.notes = mergeNotes(JSON.parse(S.saved), S.notes, normalize(data));
+  S.sha = r.sha;
+  S.file = f;
+  S.rev = Math.max(S.rev, data.rev | 0);
+  if (!S.notes.some(n => n.id === S.cur)) S.cur = S.notes[0].id;
+  const n = curNote();
+  if ($('title').value !== n.title) $('title').value = n.title;
+  if ($('text').value !== n.text) $('text').value = n.text;
+  renderList();
+}
+
 async function persist(next, okText) {
   const sess = session;
-  const snap = JSON.stringify(S.notes);
-  const file = await makeFile(next.key, next.salt, next.iter, { notes: JSON.parse(snap), token: next.token });
-  const sha = await putFile(next.token, file, S.sha);
-  S.sha = sha;
-  S.file = file;
-  if (sess !== session) return;   // đã Khóa trong lúc lưu: không khôi phục key/token
-  S.key = next.key; S.salt = next.salt; S.iter = next.iter; S.token = next.token;
-  S.saved = snap;
-  refreshDirty();
-  setMsg('e-msg', okText || 'Đã lưu lên GitHub.', 'ok');
+  let merged = false;
+  for (let attempt = 0; ; attempt++) {
+    const snap = JSON.stringify(S.notes);
+    const rev = Math.max(S.rev, getSeen()) + 1;
+    const file = await makeFile(next.key, next.salt, next.iter, { notes: JSON.parse(snap), token: next.token, rev });
+    let sha;
+    try {
+      sha = await putFile(next.token, file, S.sha);
+    } catch (e) {
+      if (e.code !== 'CONFLICT' || attempt >= 2 || sess !== session) throw e;
+      await mergeRemote(sess);   // tự gộp rồi thử lưu lại
+      merged = true;
+      continue;
+    }
+    S.sha = sha;
+    S.file = file;
+    cache.file = file; cache.sha = sha; cache.etag = null;
+    if (sess !== session) return;   // đã Khóa trong lúc lưu: không khôi phục key/token
+    S.key = next.key; S.salt = next.salt; S.iter = next.iter; S.token = next.token;
+    S.saved = snap;
+    S.rev = rev;
+    setSeen(Math.max(getSeen(), rev));
+    refreshDirty();
+    setMsg('e-msg', okText || (merged ? 'Đã lưu (đã gộp thay đổi từ nơi khác).' : 'Đã lưu lên GitHub.'), 'ok');
+    return;
+  }
 }
 
 let saving = false, saveAgain = false, session = 0;
@@ -762,7 +925,7 @@ async function applySettings() {
   setMsg('e-msg', 'Đang xử lý…');
   try {
     if (!(await verifyPassword(o1))) throw new Error('Mật khẩu hiện tại không đúng.');
-    const next ={ key: S.key, salt: S.salt, iter: S.iter, token: nt || S.token };
+    const next = { key: S.key, salt: S.salt, iter: S.iter, token: nt || S.token };
     if (np) {
       next.salt = crypto.getRandomValues(new Uint8Array(16));
       next.iter = ITER;
@@ -779,12 +942,15 @@ async function applySettings() {
   } finally {
     saving = false;
     busy($('applyBtn'), false);
+    if (saveAgain) { saveAgain = false; save(); }   // lần lưu bị hoãn trong lúc đổi mật khẩu/token
   }
 }
 
 function lock() {
   session++; saveAgain = false;
-  S.key = null; S.token = null; S.salt = null; S.file = null; S.sha = null;
+  clearTimeout(dirtyTimer);
+  clearTimeout(idleTimer);
+  S.key = null; S.token = null; S.salt = null; S.file = null; S.sha = null; S.rev = 0;
   S.notes = []; S.cur = null; S.dirty = false; S.saved = '';
   $('text').value = '';
   $('title').value = '';
@@ -803,22 +969,54 @@ function lock() {
 }
 
 /* ---------- tự khóa khi không hoạt động ---------- */
-let idleTimer = null;
+let idleTimer = null, lastActive = Date.now();
 function resetIdle() {
+  lastActive = Date.now();
   clearTimeout(idleTimer);
-  if (S.key) {
-    idleTimer = setTimeout(() => { if (S.key && !S.dirty) lock(); else resetIdle(); }, IDLE_MS);
-  }
+  if (S.key) idleTimer = setTimeout(idleLock, IDLE_MS);
+}
+/* hết hạn: nếu còn thay đổi chưa lưu thì lưu trước rồi mới khóa; lưu lỗi thì giữ nguyên và thử lại sau */
+async function idleLock() {
+  if (!S.key) return;
+  if (S.dirty) await save();
+  if (S.key && !S.dirty) lock(); else resetIdle();
+}
+function checkIdle() {
+  if (S.key && Date.now() - lastActive >= IDLE_MS) idleLock();
 }
 ['keydown', 'pointerdown', 'input'].forEach(t => document.addEventListener(t, resetIdle, { passive: true }));
+/* timer bị đóng băng khi tab ẩn/điện thoại ngủ: kiểm tra lại theo thời gian thực khi quay lại */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { if (S.key && S.dirty) save(); }   // ẩn tab / chuyển app / thu nhỏ: tự lưu
+  else checkIdle();
+});
+/* đóng tab hoặc rời trang: cố gắng lưu (không đảm bảo hoàn tất nếu trình duyệt đóng ngay) */
+window.addEventListener('pagehide', () => { if (S.key && S.dirty) save(); });
+/* trang khôi phục từ bfcache: không để dữ liệu đã giải mã hiện lại */
+window.addEventListener('pageshow', e => { if (e.persisted && S.key && !S.dirty) lock(); });
 
 /* ---------- sự kiện ---------- */
 $('setupForm').addEventListener('submit', doSetup);
 $('unlockForm').addEventListener('submit', doUnlock);
 $('saveBtn').addEventListener('click', save);
-$('lockBtn').addEventListener('click', () => {
-  if (S.dirty && !confirm('Còn thay đổi chưa lưu. Vẫn khóa?')) return;
-  lock();
+/* chờ lần lưu đang chạy (kể cả lần lưu nối tiếp) xong; trả về true nếu không còn thay đổi chưa lưu */
+async function flushSave() {
+  const wait = () => new Promise(r => setTimeout(r, 100));
+  while (saving) await wait();
+  if (S.dirty) await save();
+  while (saving) await wait();
+  return !S.dirty;
+}
+$('lockBtn').addEventListener('click', async () => {
+  if (S.dirty) {
+    busy($('lockBtn'), true);
+    try {
+      if (!(await flushSave()) && S.key && !confirm('Lưu không thành công, còn thay đổi chưa lưu. Vẫn khóa?')) return;
+    } finally {
+      busy($('lockBtn'), false);
+    }
+  }
+  if (S.key) lock();
 });
 $('applyBtn').addEventListener('click', applySettings);
 $('addBtn').addEventListener('click', askAdd);
@@ -848,13 +1046,17 @@ $('d-pw').addEventListener('keydown', e => {
 });
 $('text').addEventListener('input', () => {
   curNote().text = $('text').value;
-  refreshDirty();
+  markDirtySoon();
 });
 $('title').addEventListener('input', () => {
-  curNote().title = $('title').value;
-  renderList();
-  refreshDirty();
+  const n = curNote();
+  n.title = $('title').value;
+  // chỉ cập nhật nhãn của mục đang chọn, không dựng lại cả danh sách mỗi phím
+  const b = Array.from($('noteList').children).find(el => el.dataset && el.dataset.id === n.id);
+  if (b) { b.textContent = labelOf(n); b.title = b.textContent; }
+  markDirtySoon();
 });
+$('retryBtn').addEventListener('click', init);
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && !$('v-editor').hidden) {
     e.preventDefault();
